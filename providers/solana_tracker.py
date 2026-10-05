@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import httpx
 
 from .base import BaseProvider, ProviderError
+
+logger = logging.getLogger(__name__)
 
 
 class SolanaTrackerProvider(BaseProvider):
@@ -19,6 +22,9 @@ class SolanaTrackerProvider(BaseProvider):
 
     async def get_token_snapshot(self, address: str) -> dict[str, Any]:
         data = await self._get_json(f"{self.base_url}/tokens/{address}")
+        if not data:
+            logger.warning("solana_tracker returned no token data for %s", address)
+            raise ProviderError("Solana Tracker returned no token data")
         token = data.get("token") or data
         pools = data.get("pools") or []
         primary_pool = pools[0] if pools else {}
@@ -42,10 +48,12 @@ class SolanaTrackerProvider(BaseProvider):
         data = await self._get_json(f"{self.base_url}/tokens/{address}/holders")
         holders = data.get("holders") or data.get("accounts") or []
         if not holders:
+            logger.warning("solana_tracker holder data unavailable for %s", address)
             raise ProviderError("Solana holder data unavailable")
         percentages = [_float(item.get("percentage") or item.get("pct")) for item in holders]
         percentages = [item for item in percentages if item is not None]
         if not percentages:
+            logger.warning("solana_tracker holder percentages unavailable for %s", address)
             raise ProviderError("Solana holder percentages unavailable")
         return {
             "holder_count": len(holders),
@@ -55,6 +63,7 @@ class SolanaTrackerProvider(BaseProvider):
 
     async def get_helius_token_accounts(self, owner_address: str) -> dict[str, Any]:
         if not self.helius_api_key:
+            logger.warning("solana_tracker Helius request skipped: HELIUS_API_KEY is not configured")
             raise ProviderError("HELIUS_API_KEY is not configured")
         url = f"https://mainnet.helius-rpc.com/?api-key={self.helius_api_key}"
         payload = {
@@ -63,11 +72,17 @@ class SolanaTrackerProvider(BaseProvider):
             "method": "getTokenAccountsByOwner",
             "params": [owner_address, {"programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"}, {"encoding": "jsonParsed"}],
         }
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
-            data = response.json()
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+                data = response.json()
+        except httpx.HTTPError as exc:
+            safe_error = str(exc).replace(self.helius_api_key, "***")
+            logger.error("solana_tracker Helius request failed: %s", safe_error)
+            raise ProviderError(f"Helius request failed: {safe_error}") from exc
         if "error" in data:
+            logger.error("solana_tracker Helius RPC returned an error: %s", data["error"])
             raise ProviderError(str(data["error"]))
         return data
 

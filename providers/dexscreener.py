@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from cachetools import TTLCache
 
 from .base import BaseProvider, ProviderError
+
+logger = logging.getLogger(__name__)
 
 
 class DexScreenerProvider(BaseProvider):
@@ -26,12 +29,13 @@ class DexScreenerProvider(BaseProvider):
         data = await self._get_json(f"{self.base_url}/tokens/{address}")
         pairs = data.get("pairs") or []
         if not pairs:
+            logger.warning("dexscreener returned no pairs for address %s", address)
             raise ProviderError("DexScreener returned no pairs for this token")
 
         primary = max(pairs, key=lambda pair: _float(pair.get("liquidity", {}).get("usd")) or 0)
         base_token = primary.get("baseToken") or {}
         quote_token = primary.get("quoteToken") or {}
-        token = base_token
+        token = base_token if str(base_token.get("address", "")).lower() == address.lower() else base_token
         txns = primary.get("txns", {}).get("h24", {}) or {}
 
         snapshot = {

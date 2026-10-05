@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
 from .base import ProviderError
+
+logger = logging.getLogger(__name__)
 
 ProviderCall = Callable[[], Awaitable[dict[str, Any] | None]]
 
@@ -28,7 +31,12 @@ class FallbackManager:
                 result = await call()
                 if result:
                     return FallbackResult(data=result, provider=provider_name, errors=errors)
-                errors.append(f"{provider_name}: no data")
-            except Exception as exc:
-                errors.append(f"{provider_name}: {exc}")
+                message = f"{provider_name}: no data"
+                logger.warning("Provider returned no data: %s", message)
+                errors.append(message)
+            except Exception as exc:  # provider failures must not crash the bot
+                message = f"{provider_name}: {exc}"
+                logger.warning("Provider failed: %s", message)
+                errors.append(message)
+        logger.error("All providers failed: %s", " | ".join(errors))
         raise ProviderError("All providers failed. " + " | ".join(errors))

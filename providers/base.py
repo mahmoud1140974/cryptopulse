@@ -1,11 +1,14 @@
-"""Base provider primitives with timeout, retry, and consistent errors."""
+"""Base provider primitives with timeout, retry, logging, and consistent errors."""
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class ProviderError(RuntimeError):
@@ -25,7 +28,7 @@ class BaseProvider:
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
     ) -> dict[str, Any] | list[Any]:
-        last_error: Exception | None = None
+        last_error = "unknown error"
         for attempt in range(self.max_retries):
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -38,7 +41,35 @@ class BaseProvider:
                     raise ProviderError(f"{self.name} returned an unsupported JSON response")
                 return data
             except (httpx.HTTPError, ValueError, ProviderError) as exc:
-                last_error = exc
+                last_error = _sanitize_error(exc, params=params, headers=headers)
+                logger.warning(
+                    "%s request failed on attempt %s/%s: %s",
+                    self.name,
+                    attempt + 1,
+                    self.max_retries,
+                    last_error,
+                )
                 if attempt < self.max_retries - 1:
                     await asyncio.sleep(min(2**attempt, 4))
+        logger.error(
+            "%s request failed permanently after %s attempts: %s",
+            self.name,
+            self.max_retries,
+            last_error,
+        )
         raise ProviderError(f"{self.name} request failed: {last_error}")
+
+
+def _sanitize_error(
+    exc: Exception,
+    params: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+) -> str:
+    message = str(exc)
+    for mapping in (params or {}, headers or {}):
+        for key, value in mapping.items():
+            if value is None:
+                continue
+            if any(part in key.lower() for part in ("key", "token", "secret", "password")):
+                message = message.replace(str(value), "***")
+    return message

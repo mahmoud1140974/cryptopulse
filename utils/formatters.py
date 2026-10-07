@@ -1,116 +1,134 @@
-"""Telegram message formatting helpers."""
-
-from __future__ import annotations
+"""Formatters for Telegram messages."""
 
 import html
-from decimal import Decimal, InvalidOperation
 from typing import Any
 
-DISCLAIMER = (
-    "Crypto assets are highly risky. This tool provides data and risk indicators "
-    "for informational purposes only and does not constitute financial advice."
-)
 
-
-def escape(value: Any) -> str:
-    return html.escape(str(value), quote=False)
-
-
-def format_money(value: Any) -> str:
-    if value is None:
-        return "Data unavailable."
+def _format_number(val: Any, decimals: int = 2) -> str:
+    if val is None:
+        return "N/A"
     try:
-        number = float(value)
+        v = float(val)
+        # Pour les très petits nombres, on garde jusqu'à 8 décimales sans trailing zeros
+        if decimals == 8:
+            formatted = f"{v:.8f}".rstrip('0').rstrip('.')
+            return formatted if formatted else "0"
+        return f"{v:,.{decimals}f}"
     except (TypeError, ValueError):
-        return "Data unavailable."
-    if number >= 1:
-        return f"${number:,.2f}"
-    return f"${number:,.8f}".rstrip("0").rstrip(".")
+        return str(val)
 
 
-def format_number(value: Any) -> str:
-    if value is None:
-        return "Data unavailable."
+def _format_int(val: Any) -> str:
+    if val is None:
+        return "N/A"
     try:
-        return f"{int(value):,}"
+        return f"{int(val):,}"
     except (TypeError, ValueError):
-        return "Data unavailable."
+        return str(val)
 
 
-def format_percent(value: Any) -> str:
-    if value is None:
-        return "Data unavailable."
-    try:
-        return f"{float(value):.2f}%"
-    except (TypeError, ValueError):
-        return "Data unavailable."
-
-
-def short_address(address: str | None) -> str:
-    if not address:
-        return "Data unavailable."
-    if len(address) <= 14:
-        return escape(address)
-    return f"{escape(address[:6])}…{escape(address[-4:])}"
+def _format_tax(tax: float | None) -> str:
+    if tax is None:
+        return "N/A"
+    # GoPlus retourne souvent en décimal (ex: 0.05 pour 5%)
+    pct = tax * 100 if tax < 1 else tax
+    if pct.is_integer():
+        return f"{int(pct)}%"
+    return f"{pct:.1f}%"
 
 
 def format_token_report(analysis: dict[str, Any]) -> str:
-    """Format a token analysis without inventing missing data."""
-    risk = analysis.get("risk") or {}
-    symbol = analysis.get("symbol") or analysis.get("name") or "Unknown token"
-    chain = analysis.get("chain") or "Unknown"
-    score = risk.get("score")
-    band = risk.get("band") or "Data unavailable."
-    emoji = risk.get("emoji") or "⚪"
-    reasons = risk.get("reasons") or []
+    """Formate le rapport d'analyse pour l'affichage Telegram en HTML."""
+    risk = analysis.get("risk", {})
+    score = risk.get("score", 0)
+    risk_level = risk.get("level", "UNKNOWN")
 
-    title = f"{emoji} <b>{escape(str(band)).upper()}</b>"
-    if score is not None:
-        title += f" — Score {escape(score)}/100"
-    title += f"\n<b>{escape(str(symbol))}</b> ({short_address(analysis.get('address'))})"
-
-    reason_lines = ["<b>Reasons:</b>"]
-    if reasons:
-        reason_lines.extend(f"• {escape(reason)}" for reason in reasons)
+    # Header Risk
+    if score >= 75:
+        risk_emoji = "🚨"
+    elif score >= 50:
+        risk_emoji = "⚠️"
     else:
-        reason_lines.append("• Data unavailable.")
+        risk_emoji = "✅"
 
-    data_lines = [
-        "",
-        "📊 <b>Data:</b>",
-        f"Price: {format_money(analysis.get('price_usd'))}",
-        f"Liquidity: {format_money(analysis.get('liquidity_usd'))}",
-        f"Volume 24h: {format_money(analysis.get('volume_24h_usd'))}",
-        f"Market cap: {format_money(analysis.get('market_cap_usd'))}",
-        f"Holders: {format_number(analysis.get('holder_count'))}",
-        f"Chain: {escape(str(chain))}",
-    ]
+    lines = []
+    lines.append(f"{risk_emoji} <b>{risk_level.upper()} RISK — Score {score}/100</b>")
 
-    return "\n".join([title, "", *reason_lines, *data_lines, "", f"⚠️ {DISCLAIMER}"])
+    symbol = html.escape(analysis.get("symbol") or "UNKNOWN")
+    address = analysis.get("contract_address") or analysis.get("address") or ""
+    short_addr = f"{address[:6]}…{address[-4:]}" if address and len(address) > 10 else address
+    lines.append(f"<b>${symbol}</b> ({short_addr})\n")
 
+    # Reasons
+    reasons = risk.get("reasons", [])
+    if reasons:
+        lines.append("📋 <b>Reasons</b>")
+        for reason in reasons:
+            lines.append(f"• {html.escape(str(reason))}")
+        lines.append("")
 
-def format_alert_message(item: dict[str, Any], snapshot: dict[str, Any], reasons: list[str]) -> str:
-    symbol = item.get("symbol") or snapshot.get("symbol") or "Tracked token"
-    reason_text = "\n".join(f"• {escape(reason)}" for reason in reasons) if reasons else "• Data unavailable."
-    return "\n".join(
-        [
-            f"🔔 <b>CryptoPulse Alert</b> — {escape(str(symbol))}",
-            "",
-            reason_text,
-            "",
-            f"Price: {format_money(snapshot.get('price_usd'))}",
-            f"Liquidity: {format_money(snapshot.get('liquidity_usd'))}",
-            f"Volume 24h: {format_money(snapshot.get('volume_24h_usd'))}",
-            "",
-            f"⚠️ {DISCLAIMER}",
-        ]
-    )
+    # Market Data
+    lines.append("📊 <b>Market Data</b>")
 
+    price = analysis.get("price_usd")
+    if price is not None:
+        p = float(price)
+        if p < 0.01:
+            lines.append(f"💵 <b>Price:</b> ${_format_number(price, 8)}")
+        else:
+            lines.append(f"💵 <b>Price:</b> ${_format_number(price, 2)}")
+    else:
+        lines.append("💵 <b>Price:</b> N/A")
 
-def decimal_or_none(value: Any) -> Decimal | None:
-    if value is None:
-        return None
-    try:
-        return Decimal(str(value))
-    except (InvalidOperation, ValueError):
-        return None
+    liquidity = analysis.get("liquidity_usd")
+    lines.append(f"💧 <b>Liquidity:</b> ${_format_number(liquidity)}")
+
+    volume = analysis.get("volume_24h")
+    lines.append(f"📈 <b>Volume 24h:</b> ${_format_number(volume)}")
+
+    mcap = analysis.get("market_cap")
+    lines.append(f"🏦 <b>Market Cap:</b> ${_format_number(mcap)}")
+
+    # BUG 3: Holders
+    holder_count = analysis.get("holder_count")
+    lines.append(f"👥 <b>Holders:</b> {_format_int(holder_count)}")
+
+    # Chain
+    chain_raw = analysis.get("chain", "unknown")
+    chain = chain_raw.capitalize() if isinstance(chain_raw, str) else "Unknown"
+    lines.append(f"⛓ <b>Chain:</b> {chain}")
+
+    # BUG 4: Honeypot & Taxes
+    is_honeypot = analysis.get("is_honeypot")
+    if is_honeypot is not None:
+        if is_honeypot:
+            lines.append("🍯 <b>Honeypot:</b> YES 🚨 DO NOT TRADE")
+        else:
+            lines.append("🍯 <b>Honeypot:</b> No ✅")
+
+    buy_tax = analysis.get("buy_tax")
+    sell_tax = analysis.get("sell_tax")
+    if buy_tax is not None or sell_tax is not None:
+        lines.append(f"💰 <b>Buy/Sell tax:</b> {_format_tax(buy_tax)} / {_format_tax(sell_tax)}")
+
+    # BUG 1: Ownership
+    is_renounced = analysis.get("is_renounced")
+    owner_addr = analysis.get("owner_address")
+    if is_renounced is not None:
+        if is_renounced:
+            lines.append("👑 <b>Ownership:</b> Renounced ✅")
+        else:
+            short_owner = f"{owner_addr[:6]}…{owner_addr[-4:]}" if owner_addr and len(owner_addr) > 10 else (owner_addr or "Unknown")
+            lines.append(f"👑 <b>Ownership:</b> NOT renounced ⚠️ (owner: {short_owner})")
+
+    # BUG 2: Freeze authority (Solana only)
+    if str(chain_raw).lower() == "solana":
+        freeze_auth = analysis.get("freeze_authority")
+        if freeze_auth:
+            lines.append("🥶 <b>Freeze Authority:</b> Active ⚠️")
+        else:
+            lines.append("🥶 <b>Freeze Authority:</b> Disabled ✅")
+
+    lines.append("\n⚠️ <i>Crypto assets are highly risky. Always do your own research before trading.</i>")
+
+    return "\n".join(lines)

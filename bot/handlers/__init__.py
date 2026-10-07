@@ -2,7 +2,7 @@
 
 from aiogram import Router
 
-from bot.handlers import alerts, help, market, scan, start, watchlist
+from bot.handlers import alerts, help, market, scan, start, subscription, watchlist
 
 
 def get_routers() -> list[Router]:
@@ -12,5 +12,6 @@ def get_routers() -> list[Router]:
         watchlist.router,
         alerts.router,
         market.router,
+        subscription.router,
         help.router,
     ]

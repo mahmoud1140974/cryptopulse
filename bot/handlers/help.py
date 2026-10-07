@@ -10,17 +10,39 @@ from bot.keyboards import back_only
 
 router = Router(name="help")
 
+
 HELP_TEXT = (
     "❓ <b>CryptoPulse Help</b>\n\n"
-    "<b>Phase 1 commands</b>\n"
-    "/scan &lt;contract&gt; — scan a token contract\n"
+
+    "<b>🔍 Token Analysis</b>\n"
+    "/scan &lt;contract&gt; — analyze a token\n"
     "/track &lt;contract&gt; — add a token to your watchlist\n"
     "/watchlist — show your tracked tokens\n"
-    "/alerts — show recent alerts\n"
-    "/market — market data placeholder\n"
-    "/help — show this help\n\n"
-    "Supported address formats: EVM 0x… and Solana base58.\n\n"
-    "Crypto assets are highly risky. This tool provides data and risk indicators for informational purposes only and does not constitute financial advice."
+    "/alerts — show recent alerts\n\n"
+
+    "<b>📊 Market &amp; Data</b>\n"
+    "/prices — top 10 cryptocurrencies\n"
+    "/market — global market overview\n\n"
+
+    "<b>💎 Subscription</b>\n"
+    "/subscribe — see all plans (Free / Pro / Premium)\n"
+    "/mysubscription — view your current plan\n\n"
+
+    "<b>❓ Other</b>\n"
+    "/help — show this help\n"
+    "/menu — open the main menu\n\n"
+
+    "<b>Supported chains</b>\n"
+    en "EVM: Ethereum, BNB Chain, Polygon, Arbitrum, Base\n"
+    "Solana\n\n"
+
+    "<b>Supported address formats</b>\n"
+    "EVM: 0x… (42 characters)\n"
+    "Solana: base58 (32–44 characters)\n\n"
+
+    "⚠️ <i>Crypto assets are highly risky. This tool provides data "
+    "and risk indicators for informational purposes only and does not "
+    "constitute financial advice.</i>"
 )
 
 

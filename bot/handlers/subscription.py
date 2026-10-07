@@ -6,7 +6,7 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
-from bot.keyboards import back_only
+from bot.keyboards import back_only, plans_keyboard
 from database.models import Database
 
 router = Router(name="subscription")
@@ -24,7 +24,7 @@ PLANS = {
     },
     "pro": {
         "name": "Pro",
-        "price": "~$5 / month",
+        "price": "~$5 / month (385 ⭐)",
         "scans": "100 per day",
         "watchlist": "25 tokens",
         "alerts": "every 5 min",
@@ -33,7 +33,7 @@ PLANS = {
     },
     "premium": {
         "name": "Premium",
-        "price": "~$15 / month",
+        "price": "~$15 / month (1,150 ⭐)",
         "scans": "Unlimited",
         "watchlist": "100 tokens",
         "alerts": "every 1 min",
@@ -70,8 +70,7 @@ def _plans_text() -> str:
     lines.append(f"   • Whale tracking: {prem['whales']}")
     lines.append("")
 
-    lines.append("🚧 <i>Payments are coming soon (Telegram Stars).</i>")
-    lines.append("<i>You will be able to upgrade directly from this bot.</i>")
+    lines.append("💳 <i>Pay with Telegram Stars. Use the buttons below.</i>")
 
     return "\n".join(lines)
 
@@ -90,12 +89,21 @@ def _get_plan_key(user) -> str:
     return str(plan).lower()
 
 
+def _get_expiry(user) -> str | None:
+    try:
+        if isinstance(user, dict):
+            return user.get("premium_until")
+        return getattr(user, "premium_until", None)
+    except Exception:
+        return None
+
+
 @router.message(Command("subscribe"))
 async def subscribe_handler(message: Message) -> None:
     await message.answer(
         _plans_text(),
         parse_mode="HTML",
-        reply_markup=back_only(),
+        reply_markup=plans_keyboard(),
     )
 
 
@@ -108,12 +116,18 @@ async def mysubscription_handler(message: Message, db: Database) -> None:
 
     plan_key = _get_plan_key(user)
     plan = PLANS.get(plan_key, PLANS["free"])
+    expires = _get_expiry(user)
 
     text = (
         "👤 <b>Your Subscription</b>\n\n"
         f"Plan: <b>{plan['name']}</b>\n"
-        f"Price: {plan['price']}\n\n"
-        "<b>Current limits:</b>\n"
+        f"Price: {plan['price']}\n"
+    )
+    if expires and plan_key != "free":
+        text += f"⏰ Expires on: <b>{expires[:10]}</b>\n"
+
+    text += (
+        "\n<b>Current limits:</b>\n"
         f"• Scans: {plan['scans']}\n"
         f"• Watchlist: {plan['watchlist']}\n"
         f"• Alerts: {plan['alerts']}\n\n"
@@ -127,6 +141,6 @@ async def premium_callback(callback: CallbackQuery) -> None:
     await callback.message.edit_text(
         _plans_text(),
         parse_mode="HTML",
-        reply_markup=back_only(),
+        reply_markup=plans_keyboard(),
     )
     await callback.answer()

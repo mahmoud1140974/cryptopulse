@@ -39,7 +39,7 @@ async def noop_handler(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
-@router.callback_query(lambda callback: callback.data in {"m:wallet", "m:whales", "m:premium", "m:settings"})
+@router.callback_query(lambda callback: callback.data in {"m:wallet", "m:whales", "m:settings"})
 async def phase_placeholder(callback: CallbackQuery) -> None:
     await callback.message.edit_text(
         "This feature is planned for a later phase and is not enabled in the Phase 1 MVP.",

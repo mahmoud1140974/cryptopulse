@@ -5,6 +5,14 @@ escape = html.escape
 from typing import Any
 
 
+def _get(data: dict, *keys, default=None):
+    """Cherche la première clé existante parmi keys."""
+    for k in keys:
+        if k in data and data[k] is not None:
+            return data[k]
+    return default
+
+
 def _format_number(val: Any, decimals: int = 2) -> str:
     if val is None:
         return "N/A"
@@ -48,9 +56,14 @@ def _short_address(address: Any) -> str:
 
 def format_token_report(analysis: dict[str, Any]) -> str:
     """Formate le rapport d'analyse pour l'affichage Telegram en HTML."""
-    risk = analysis.get("risk", {})
+    risk = analysis.get("risk", {}) or {}
     score = risk.get("score", 0)
-    risk_level = risk.get("level", "UNKNOWN")
+    band = risk.get("band") or risk.get("level") or "UNKNOWN"
+
+    if isinstance(band, str):
+        band_upper = band.upper().replace("_", " ")
+    else:
+        band_upper = "UNKNOWN"
 
     if score >= 75:
         risk_emoji = "🚨"
@@ -62,23 +75,23 @@ def format_token_report(analysis: dict[str, Any]) -> str:
         risk_emoji = "🟢"
 
     lines = []
-    lines.append(f"{risk_emoji} <b>{risk_level.upper()} RISK — Score {score}/100</b>")
+    lines.append(f"{risk_emoji} <b>{band_upper} — Score {score}/100</b>")
 
-    symbol = html.escape(analysis.get("symbol") or "UNKNOWN")
-    address = analysis.get("contract_address") or analysis.get("address") or ""
+    symbol = escape(str(analysis.get("symbol") or "UNKNOWN"))
+    address = _get(analysis, "contract_address", "address", "token_address", default="")
     short_addr = _short_address(address)
     lines.append(f"<b>${symbol}</b> ({short_addr})\n")
 
-    reasons = risk.get("reasons", [])
+    reasons = risk.get("reasons", []) or []
     if reasons:
         lines.append("📋 <b>Reasons</b>")
         for reason in reasons:
-            lines.append(f"• {html.escape(str(reason))}")
+            lines.append(f"• {escape(str(reason))}")
         lines.append("")
 
     lines.append("📊 <b>Market Data</b>")
 
-    price = analysis.get("price_usd")
+    price = _get(analysis, "price_usd", "price")
     if price is not None:
         try:
             p = float(price)
@@ -91,29 +104,36 @@ def format_token_report(analysis: dict[str, Any]) -> str:
     else:
         lines.append("💵 <b>Price:</b> N/A")
 
-    lines.append(f"💧 <b>Liquidity:</b> ${_format_number(analysis.get('liquidity_usd'))}")
-    lines.append(f"📈 <b>Volume 24h:</b> ${_format_number(analysis.get('volume_24h'))}")
-    lines.append(f"🏦 <b>Market Cap:</b> ${_format_number(analysis.get('market_cap'))}")
-    lines.append(f"👥 <b>Holders:</b> {_format_int(analysis.get('holder_count'))}")
+    liquidity = _get(analysis, "liquidity_usd", "liquidity")
+    lines.append(f"💧 <b>Liquidity:</b> ${_format_number(liquidity)}")
+
+    volume = _get(analysis, "volume_24h_usd", "volume_24h", "volume")
+    lines.append(f"📈 <b>Volume 24h:</b> ${_format_number(volume)}")
+
+    mcap = _get(analysis, "market_cap_usd", "market_cap", "mcap")
+    lines.append(f"🏦 <b>Market Cap:</b> ${_format_number(mcap)}")
+
+    holders = _get(analysis, "holder_count", "holders_count", "holders", "total_holders")
+    lines.append(f"👥 <b>Holders:</b> {_format_int(holders)}")
 
     chain_raw = analysis.get("chain", "unknown")
     chain = chain_raw.capitalize() if isinstance(chain_raw, str) else "Unknown"
     lines.append(f"⛓ <b>Chain:</b> {chain}")
 
-    is_honeypot = analysis.get("is_honeypot")
+    is_honeypot = _get(analysis, "is_honeypot", "honeypot")
     if is_honeypot is not None:
         if is_honeypot:
             lines.append("🍯 <b>Honeypot:</b> YES 🚨 DO NOT TRADE")
         else:
             lines.append("🍯 <b>Honeypot:</b> No ✅")
 
-    buy_tax = analysis.get("buy_tax")
-    sell_tax = analysis.get("sell_tax")
+    buy_tax = _get(analysis, "buy_tax", "buy_fee")
+    sell_tax = _get(analysis, "sell_tax", "sell_fee")
     if buy_tax is not None or sell_tax is not None:
         lines.append(f"💰 <b>Buy/Sell tax:</b> {_format_tax(buy_tax)} / {_format_tax(sell_tax)}")
 
-    is_renounced = analysis.get("is_renounced")
-    owner_addr = analysis.get("owner_address")
+    is_renounced = _get(analysis, "is_renounced", "ownership_renounced", "renounced")
+    owner_addr = _get(analysis, "owner_address", "owner")
     if is_renounced is not None:
         if is_renounced:
             lines.append("👑 <b>Ownership:</b> Renounced ✅")
@@ -122,7 +142,7 @@ def format_token_report(analysis: dict[str, Any]) -> str:
             lines.append(f"👑 <b>Ownership:</b> NOT renounced ⚠️ (owner: {short_owner})")
 
     if str(chain_raw).lower() == "solana":
-        freeze_auth = analysis.get("freeze_authority")
+        freeze_auth = _get(analysis, "freeze_authority")
         if freeze_auth:
             lines.append("🥶 <b>Freeze Authority:</b> Active ⚠️")
         else:
@@ -134,14 +154,8 @@ def format_token_report(analysis: dict[str, Any]) -> str:
 
 
 def format_alert_message(item: dict[str, Any], snapshot: dict[str, Any], reasons: list[str]) -> str:
-    """Formate un message d'alerte Telegram en HTML premium.
-
-    Utilisé par alerts/alert_engine.py.
-    - item : dict du watchlist (symbol, contract_address, chain, ...)
-    - snapshot : dict du marché actuel (price_usd, liquidity_usd, volume_24h_usd)
-    - reasons : liste de chaînes expliquant pourquoi l'alerte s'est déclenchée
-    """
-    symbol = html.escape(str(item.get("symbol") or "TOKEN"))
+    """Formate un message d'alerte Telegram en HTML premium."""
+    symbol = escape(str(item.get("symbol") or "TOKEN"))
     address = item.get("contract_address") or item.get("address") or ""
     short_addr = _short_address(address)
     chain_raw = item.get("chain") or "unknown"
@@ -155,7 +169,7 @@ def format_alert_message(item: dict[str, Any], snapshot: dict[str, Any], reasons
     if reasons:
         lines.append("📋 <b>Reasons</b>")
         for reason in reasons:
-            lines.append(f"• {html.escape(str(reason))}")
+            lines.append(f"• {escape(str(reason))}")
         lines.append("")
 
     lines.append("📊 <b>Current Snapshot</b>")

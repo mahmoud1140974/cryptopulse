@@ -12,6 +12,7 @@ from providers.coingecko import CoinGeckoProvider
 from providers.dexscreener import DexScreenerProvider
 from providers.etherscan import EtherscanProvider
 from providers.fallback_manager import FallbackManager
+from providers.goplus import GoPlusProvider
 from providers.solana_tracker import SolanaTrackerProvider
 from utils.validators import validate_address
 
@@ -25,6 +26,7 @@ class TokenAnalyzer:
         coingecko: CoinGeckoProvider | None = None,
         etherscan: EtherscanProvider | None = None,
         solana_tracker: SolanaTrackerProvider | None = None,
+        goplus: GoPlusProvider | None = None,
     ) -> None:
         self.settings = settings
         self.fallback = fallback or FallbackManager()
@@ -32,6 +34,7 @@ class TokenAnalyzer:
         self.coingecko = coingecko or CoinGeckoProvider(settings.coingecko_api_key)
         self.etherscan = etherscan or EtherscanProvider(settings.etherscan_api_key)
         self.solana_tracker = solana_tracker or SolanaTrackerProvider(settings.helius_api_key)
+        self.goplus = goplus or GoPlusProvider()
 
     async def analyze(self, address: str, chain_hint: str | None = None) -> dict[str, Any]:
         validation = validate_address(address)
@@ -43,17 +46,29 @@ class TokenAnalyzer:
         snapshot = snapshot_result.data
         chain = snapshot.get("chain") or chain_hint or family
 
+        # Préparation des tâches asynchrones (Etherscan + GoPlus en parallèle)
         holder_task = self._safe_call(self._get_holder_stats(address, chain, family))
         contract_task = self._safe_call(self._get_contract_analysis(address, chain, family))
-        holder_stats, contract_analysis = await asyncio.gather(holder_task, contract_task)
+        goplus_task = self._safe_call(self._get_goplus_security(address, chain, family))
+        
+        # Exécution parallèle de toutes les requêtes d'analyse
+        holder_stats, contract_analysis, goplus_security = await asyncio.gather(
+            holder_task, contract_task, goplus_task
+        )
+        
+        # Sécurité : s'assurer qu'on a bien des dictionnaires même en cas d'erreur
         holder_stats = holder_stats or {}
         contract_analysis = contract_analysis or {}
+        goplus_security = goplus_security or {}
 
         token_age_days = _token_age_days(snapshot.get("pair_created_at"))
+        
+        # Fusion de toutes les données
         merged: dict[str, Any] = {
             **snapshot,
             **holder_stats,
             **contract_analysis,
+            **goplus_security,  # Ajout des données de sécurité GoPlus
             "chain": chain,
             "token_age_days": token_age_days,
             "snapshot_provider": snapshot_result.provider,
@@ -91,6 +106,12 @@ class TokenAnalyzer:
         if family != "evm":
             return {}
         return await self.etherscan.get_contract_analysis(address, chain)
+
+    async def _get_goplus_security(self, address: str, chain: str, family: str) -> dict[str, Any]:
+        """Appel à GoPlus (uniquement pour les chaînes EVM)."""
+        if family != "evm":
+            return {}
+        return await self.goplus.get_token_security(address, chain)
 
     @staticmethod
     async def _safe_call(coro) -> dict[str, Any] | None:

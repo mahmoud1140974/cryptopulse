@@ -27,6 +27,13 @@ CHAIN_ID_MAP = {
     "pulsechain": 369,
 }
 
+# Adresses considérées comme "renoncées" (burn address, zero address, dead)
+_RENOUNCED_ADDRESSES = {
+    "0x0000000000000000000000000000000000000000",
+    "0x000000000000000000000000000000000000dead",
+    "0x0000000000000000000000000000000000000001",
+}
+
 
 class GoPlusProvider:
     BASE_URL = "https://api.gopluslabs.io/api/v1"
@@ -44,7 +51,7 @@ class GoPlusProvider:
         """Résout l'ID de la chaîne pour l'API GoPlus."""
         if chain.isdigit():
             return chain
-        return str(CHAIN_ID_MAP.get(chain.lower(), "1"))  # Défaut à Ethereum (1) si inconnu
+        return str(CHAIN_ID_MAP.get(chain.lower(), "1"))  # Défaut à Ethereum
 
     async def get_token_security(self, address: str, chain: str) -> dict[str, Any]:
         """
@@ -59,83 +66,172 @@ class GoPlusProvider:
             session = await self._get_session()
             async with session.get(url, params=params) as response:
                 if response.status != 200:
-                    logger.warning(f"GoPlus API a retourné le statut {response.status} pour {address}")
+                    logger.warning(
+                        "GoPlus API a retourné le statut %s pour %s", response.status, address
+                    )
                     return {}
-                
+
                 data = await response.json()
 
                 if data.get("code") != 1:
-                    logger.warning(f"GoPlus API a retourné une erreur pour {address}: {data.get('message')}")
+                    logger.warning(
+                        "GoPlus API a retourné une erreur pour %s: %s",
+                        address, data.get("message"),
+                    )
                     return {}
 
-                # La réponse est sous la forme: result -> { address_lower: { ... } }
                 result = data.get("result", {})
                 token_data = result.get(address.lower())
                 if not token_data:
-                    logger.warning(f"Aucune donnée GoPlus trouvée pour l'adresse {address} sur la chaîne {chain_id}.")
+                    logger.warning(
+                        "Aucune donnée GoPlus trouvée pour l'adresse %s sur la chaîne %s.",
+                        address, chain_id,
+                    )
                     return {}
 
                 return self._parse_token_security(token_data)
 
         except Exception as e:
-            logger.error(f"Erreur inattendue GoPlus pour {address}: {e}")
+            logger.error("Erreur inattendue GoPlus pour %s: %s", address, e)
             return {}
 
     @staticmethod
     def _parse_token_security(raw: dict[str, Any]) -> dict[str, Any]:
         """Extrait et formate les données pertinentes de la réponse brute GoPlus."""
-        
+
         def to_bool(val: Any) -> bool | None:
             if val is None:
                 return None
-            return str(val) == "1"
+            if isinstance(val, bool):
+                return val
+            s = str(val).strip().lower()
+            if s in ("1", "true", "yes", "y"):
+                return True
+            if s in ("0", "false", "no", "n"):
+                return False
+            return None
 
         def to_float(val: Any) -> float | None:
+            if val is None:
+                return None
+            s = str(val).strip()
+            if s in ("", "-", "n/a", "na", "unknown", "null", "none"):
+                return None
             try:
-                return float(val) if val not in (None, "", "-") else None
+                return float(s)
             except (TypeError, ValueError):
                 return None
 
-        # Calcul du pourcentage des 10 plus gros holders
-        holders = raw.get("holders", [])
-        top10_pct = 0.0
+        def to_int(val: Any) -> int | None:
+            if val is None:
+                return None
+            s = str(val).strip()
+            if s in ("", "-", "n/a", "na", "unknown", "null", "none"):
+                return None
+            try:
+                return int(float(s))
+            except (TypeError, ValueError):
+                return None
+
+        def normalize_tax(value: float | None) -> float | None:
+            """GoPlus renvoie souvent un décimal (0.05 = 5%). On normalise en %."""
+            if value is None:
+                return None
+            if value < 0:
+                return None
+            # Si la valeur est <= 1, c'est probablement un décimal → multiplier par 100
+            if value <= 1:
+                return round(value * 100, 4)
+            return round(value, 4)
+
+        # ---------- Top 10 holders ----------
+        holders = raw.get("holders") or []
+        top10_pct: float | None = None
         if holders:
             try:
-                # Trier par pourcentage décroissant
                 sorted_holders = sorted(
-                    holders, key=lambda h: float(h.get("percent", 0)), reverse=True
+                    holders,
+                    key=lambda h: float(h.get("percent") or 0),
+                    reverse=True,
                 )
+                total = 0.0
+                found = False
                 for h in sorted_holders[:10]:
                     pct = to_float(h.get("percent"))
                     if pct is not None:
-                        top10_pct += pct
-                
-                # Normalisation : GoPlus renvoie souvent en décimal (ex: "0.1" pour 10%)
-                # On vérifie la somme totale pour savoir si on doit multiplier par 100
-                total_pct = sum(to_float(h.get("percent")) or 0 for h in holders)
-                if 0 < total_pct <= 1.5:
-                    top10_pct = top10_pct * 100.0
+                        total += pct
+                        found = True
+                if found:
+                    # GoPlus retourne parfois en décimal (0.37 = 37%)
+                    if total <= 1.5:
+                        total = total * 100.0
+                    top10_pct = round(total, 2)
             except Exception:
                 pass
 
-        owner_addr = raw.get("owner_address", "")
-        is_renounced = owner_addr in (
-            "0x0000000000000000000000000000000000000000",
-            "0x000000000000000000000000000000000000dead",
-            "0x0000000000000000000000000000000000000001",
-        )
+        # ---------- Owner / renounced ----------
+        owner_addr = str(raw.get("owner_address") or "").strip()
+        if owner_addr and owner_addr.lower() in _RENOUNCED_ADDRESSES:
+            is_renounced: bool | None = True
+        elif owner_addr:
+            is_renounced = False
+        else:
+            is_renounced = None
 
+        # ---------- Taxes ----------
+        buy_tax_raw = to_float(raw.get("buy_tax"))
+        sell_tax_raw = to_float(raw.get("sell_tax"))
+        buy_tax_pct = normalize_tax(buy_tax_raw)
+        sell_tax_pct = normalize_tax(sell_tax_raw)
+
+        # ---------- Contract verification ----------
+        is_open_source = to_bool(raw.get("is_open_source"))
+
+        # ---------- Mint / Blacklist ----------
+        is_mintable = to_bool(raw.get("is_mintable"))
+        is_blacklistable = to_bool(raw.get("is_blacklisted"))
+
+        # On renvoie les DEUX noms (alias) pour que tous les consommateurs
+        # (scorer, formatter) trouvent l'information quel que soit le nom cherché.
         return {
+            # Honeypot
             "is_honeypot": to_bool(raw.get("is_honeypot")),
-            "buy_tax": to_float(raw.get("buy_tax")),
-            "sell_tax": to_float(raw.get("sell_tax")),
-            "top10_holders_pct": round(top10_pct, 2) if top10_pct else None,
-            "owner_address": owner_addr,
+            "honeypot": to_bool(raw.get("is_honeypot")),
+
+            # Taxes (format brut + format %)
+            "buy_tax": buy_tax_pct,
+            "buy_tax_pct": buy_tax_pct,
+            "sell_tax": sell_tax_pct,
+            "sell_tax_pct": sell_tax_pct,
+
+            # Holders
+            "top10_holders_pct": top10_pct,
+            "top10_holder_pct": top10_pct,
+            "holder_count": to_int(raw.get("holder_count")),
+            "holders_count": to_int(raw.get("holder_count")),
+
+            # Owner / renounced (2 alias)
+            "owner_address": owner_addr or None,
             "is_renounced": is_renounced,
+            "ownership_renounced": is_renounced,
+
+            # Proxy / upgradeable
             "is_proxy": to_bool(raw.get("is_proxy")),
-            "is_mintable": to_bool(raw.get("is_mintable")),
-            "is_blacklistable": to_bool(raw.get("is_blacklisted")),
-            "is_open_source": to_bool(raw.get("is_open_source")),
+            "is_upgradeable": to_bool(raw.get("is_proxy")),
+
+            # Mint (3 alias)
+            "is_mintable": is_mintable,
+            "has_mint": is_mintable,
+            "can_mint": is_mintable,
+
+            # Blacklist (3 alias)
+            "is_blacklistable": is_blacklistable,
+            "has_blacklist": is_blacklistable,
+            "can_blacklist": is_blacklistable,
+
+            # Vérification du contrat (2 alias)
+            "is_open_source": is_open_source,
+            "contract_verified": is_open_source,
         }
 
     async def close(self) -> None:

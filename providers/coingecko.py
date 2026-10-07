@@ -72,6 +72,35 @@ class CoinGeckoProvider(BaseProvider):
         data = await self._get_json(f"{self.base_url}/global")
         return data.get("data") or {}
 
+    async def get_top_coins(self, limit: int = 10) -> list[dict[str, Any]]:
+        """
+        Retourne les N cryptos par capitalisation boursière (CoinGecko /coins/markets).
+        Ne crash jamais : renvoie une liste vide en cas d'erreur.
+        """
+        cache_key = f"top:{limit}"
+        cached = self._cache.get(cache_key)
+        if cached:
+            return cached
+
+        url = (
+            f"{self.base_url}/coins/markets"
+            f"?vs_currency=usd&order=market_cap_desc&per_page={limit}"
+            f"&page=1&sparkline=false&price_change_percentage=24h"
+        )
+        headers = {"x-cg-demo-api-key": self.api_key} if self.api_key else None
+        try:
+            data = await self._get_json(url, headers=headers)
+        except Exception as exc:
+            logger.warning("coingecko get_top_coins failed: %s", exc)
+            return []
+
+        if not isinstance(data, list):
+            logger.warning("coingecko get_top_coins returned non-list")
+            return []
+
+        self._cache[cache_key] = data
+        return data
+
 
 def _float(value: Any) -> float | None:
     if value is None or value == "":

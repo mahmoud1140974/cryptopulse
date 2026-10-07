@@ -36,13 +36,19 @@ def _format_int(val: Any) -> str:
 
 
 def _format_tax(tax: Any) -> str:
+    """
+    Formate une taxe. Accepte :
+    - un pourcentage déjà normalisé (ex: 5.0 = 5%)
+    - un décimal (ex: 0.05 = 5%)
+    """
     if tax is None:
         return "N/A"
     try:
         t = float(tax)
     except (TypeError, ValueError):
         return "N/A"
-    pct = t * 100 if t < 1 else t
+    # Si la valeur est <= 1, c'est probablement un décimal
+    pct = t * 100 if t <= 1 else t
     if pct.is_integer():
         return f"{int(pct)}%"
     return f"{pct:.1f}%"
@@ -113,7 +119,13 @@ def format_token_report(analysis: dict[str, Any]) -> str:
     mcap = _get(analysis, "market_cap_usd", "market_cap", "mcap")
     lines.append(f"🏦 <b>Market Cap:</b> ${_format_number(mcap)}")
 
-    holders = _get(analysis, "holder_count", "holders_count", "holders", "total_holders")
+    holders = _get(
+        analysis,
+        "holder_count",
+        "holders_count",
+        "holders",
+        "total_holders",
+    )
     lines.append(f"👥 <b>Holders:</b> {_format_int(holders)}")
 
     chain_raw = analysis.get("chain", "unknown")
@@ -127,19 +139,29 @@ def format_token_report(analysis: dict[str, Any]) -> str:
         else:
             lines.append("🍯 <b>Honeypot:</b> No ✅")
 
-    buy_tax = _get(analysis, "buy_tax", "buy_fee")
-    sell_tax = _get(analysis, "sell_tax", "sell_fee")
+    # Cherche d'abord la version déjà en %, puis la version brute
+    buy_tax = _get(analysis, "buy_tax_pct", "buy_tax", "buy_fee")
+    sell_tax = _get(analysis, "sell_tax_pct", "sell_tax", "sell_fee")
     if buy_tax is not None or sell_tax is not None:
-        lines.append(f"💰 <b>Buy/Sell tax:</b> {_format_tax(buy_tax)} / {_format_tax(sell_tax)}")
+        lines.append(
+            f"💰 <b>Buy/Sell tax:</b> {_format_tax(buy_tax)} / {_format_tax(sell_tax)}"
+        )
 
-    is_renounced = _get(analysis, "is_renounced", "ownership_renounced", "renounced")
+    is_renounced = _get(
+        analysis,
+        "is_renounced",
+        "ownership_renounced",
+        "renounced",
+    )
     owner_addr = _get(analysis, "owner_address", "owner")
     if is_renounced is not None:
         if is_renounced:
             lines.append("👑 <b>Ownership:</b> Renounced ✅")
         else:
             short_owner = _short_address(owner_addr) or "Unknown"
-            lines.append(f"👑 <b>Ownership:</b> NOT renounced ⚠️ (owner: {short_owner})")
+            lines.append(
+                f"👑 <b>Ownership:</b> NOT renounced ⚠️ (owner: {short_owner})"
+            )
 
     if str(chain_raw).lower() == "solana":
         freeze_auth = _get(analysis, "freeze_authority")
@@ -148,12 +170,18 @@ def format_token_report(analysis: dict[str, Any]) -> str:
         else:
             lines.append("🥶 <b>Freeze Authority:</b> Disabled ✅")
 
-    lines.append("\n⚠️ <i>Crypto assets are highly risky. Always do your own research before trading.</i>")
+    lines.append(
+        "\n⚠️ <i>Crypto assets are highly risky. Always do your own research before trading.</i>"
+    )
 
     return "\n".join(lines)
 
 
-def format_alert_message(item: dict[str, Any], snapshot: dict[str, Any], reasons: list[str]) -> str:
+def format_alert_message(
+    item: dict[str, Any],
+    snapshot: dict[str, Any],
+    reasons: list[str],
+) -> str:
     """Formate un message d'alerte Telegram en HTML premium."""
     symbol = escape(str(item.get("symbol") or "TOKEN"))
     address = item.get("contract_address") or item.get("address") or ""

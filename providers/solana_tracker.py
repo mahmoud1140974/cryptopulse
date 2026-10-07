@@ -16,12 +16,27 @@ class SolanaTrackerProvider(BaseProvider):
     name = "solana_tracker"
     base_url = "https://data.solanatracker.io"
 
-    def __init__(self, helius_api_key: str | None = None, timeout: float = 10.0, max_retries: int = 3) -> None:
+    def __init__(
+        self,
+        helius_api_key: str | None = None,
+        solana_tracker_api_key: str | None = None,
+        timeout: float = 10.0,
+        max_retries: int = 3,
+    ) -> None:
         super().__init__(timeout=timeout, max_retries=max_retries)
         self.helius_api_key = helius_api_key
+        self.solana_tracker_api_key = solana_tracker_api_key
+
+    def _auth_headers(self) -> dict[str, str] | None:
+        if not self.solana_tracker_api_key:
+            return None
+        return {"x-api-key": self.solana_tracker_api_key}
 
     async def get_token_snapshot(self, address: str) -> dict[str, Any]:
-        data = await self._get_json(f"{self.base_url}/tokens/{address}")
+        data = await self._get_json(
+            f"{self.base_url}/tokens/{address}",
+            headers=self._auth_headers(),
+        )
         if not data:
             logger.warning("solana_tracker returned no token data for %s", address)
             raise ProviderError("Solana Tracker returned no token data")
@@ -39,13 +54,18 @@ class SolanaTrackerProvider(BaseProvider):
             "volume_24h_usd": _float(primary_pool.get("volume24h") or data.get("volume24h")),
             "market_cap_usd": _float(token.get("marketCap") or data.get("marketCap")),
             "holder_count": _int(token.get("holders") or data.get("holders")),
-            "freeze_authority_active": _bool_or_none(token.get("freezeAuthority") or data.get("freezeAuthority")),
+            "freeze_authority_active": _bool_or_none(
+                token.get("freezeAuthority") or data.get("freezeAuthority")
+            ),
             "pair_created_at": primary_pool.get("createdAt") or token.get("createdAt"),
         }
 
     async def get_holder_stats(self, address: str) -> dict[str, Any]:
         """Return holder concentration when available from Solana Tracker."""
-        data = await self._get_json(f"{self.base_url}/tokens/{address}/holders")
+        data = await self._get_json(
+            f"{self.base_url}/tokens/{address}/holders",
+            headers=self._auth_headers(),
+        )
         holders = data.get("holders") or data.get("accounts") or []
         if not holders:
             logger.warning("solana_tracker holder data unavailable for %s", address)
@@ -63,14 +83,20 @@ class SolanaTrackerProvider(BaseProvider):
 
     async def get_helius_token_accounts(self, owner_address: str) -> dict[str, Any]:
         if not self.helius_api_key:
-            logger.warning("solana_tracker Helius request skipped: HELIUS_API_KEY is not configured")
+            logger.warning(
+                "solana_tracker Helius request skipped: HELIUS_API_KEY is not configured"
+            )
             raise ProviderError("HELIUS_API_KEY is not configured")
         url = f"https://mainnet.helius-rpc.com/?api-key={self.helius_api_key}"
         payload = {
             "jsonrpc": "2.0",
             "id": "cryptopulse",
             "method": "getTokenAccountsByOwner",
-            "params": [owner_address, {"programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"}, {"encoding": "jsonParsed"}],
+            "params": [
+                owner_address,
+                {"programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"},
+                {"encoding": "jsonParsed"},
+            ],
         }
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:

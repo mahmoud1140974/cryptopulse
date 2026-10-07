@@ -17,6 +17,7 @@ class Settings:
     bot_token: str | None = None
     etherscan_api_key: str | None = None
     helius_api_key: str | None = None
+    solana_tracker_api_key: str | None = None
     coingecko_api_key: str | None = None
     supabase_url: str | None = None
     supabase_anon_key: str | None = None
@@ -38,6 +39,7 @@ class Settings:
             bot_token=os.getenv("BOT_TOKEN"),
             etherscan_api_key=os.getenv("ETHERSCAN_API_KEY"),
             helius_api_key=os.getenv("HELIUS_API_KEY"),
+            solana_tracker_api_key=os.getenv("SOLANA_TRACKER_API_KEY"),
             coingecko_api_key=os.getenv("COINGECKO_API_KEY"),
             supabase_url=os.getenv("SUPABASE_URL"),
             supabase_anon_key=os.getenv("SUPABASE_ANON_KEY"),
@@ -63,6 +65,10 @@ class Settings:
     @property
     def helius_configured(self) -> bool:
         return bool(self.helius_api_key)
+
+    @property
+    def solana_tracker_configured(self) -> bool:
+        return bool(self.solana_tracker_api_key)
 
     def require_bot_token(self) -> None:
         if not self.bot_token:

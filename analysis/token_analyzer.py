@@ -17,6 +17,26 @@ from providers.solana_tracker import SolanaTrackerProvider
 from utils.validators import validate_address
 
 
+def _merge_non_none(*sources: dict[str, Any] | None) -> dict[str, Any]:
+    """
+    Fusionne plusieurs dicts en ignorant les valeurs None.
+
+    Règle : la dernière valeur NON-None gagne.
+    Cela évite qu'un provider qui répond "je n'ai pas cette donnée" (None)
+    écrase une valeur réelle fournie par un autre provider.
+    """
+    result: dict[str, Any] = {}
+    for source in sources:
+        if not source:
+            continue
+        for key, value in source.items():
+            if value is not None:
+                result[key] = value
+            elif key not in result:
+                result[key] = None
+    return result
+
+
 class TokenAnalyzer:
     def __init__(
         self,
@@ -46,38 +66,39 @@ class TokenAnalyzer:
         snapshot = snapshot_result.data
         chain = snapshot.get("chain") or chain_hint or family
 
-        # Préparation des tâches asynchrones (Etherscan + GoPlus en parallèle)
+        # Récupération parallèle des données Etherscan / GoPlus / SolanaTracker
         holder_task = self._safe_call(self._get_holder_stats(address, chain, family))
         contract_task = self._safe_call(self._get_contract_analysis(address, chain, family))
         goplus_task = self._safe_call(self._get_goplus_security(address, chain, family))
-        
-        # Exécution parallèle de toutes les requêtes d'analyse
+
         holder_stats, contract_analysis, goplus_security = await asyncio.gather(
             holder_task, contract_task, goplus_task
         )
-        
-        # Sécurité : s'assurer qu'on a bien des dictionnaires même en cas d'erreur
+
         holder_stats = holder_stats or {}
         contract_analysis = contract_analysis or {}
         goplus_security = goplus_security or {}
 
         token_age_days = _token_age_days(snapshot.get("pair_created_at"))
-        
-        # Fusion de toutes les données. 
-        # On met goplus_security AVANT holder_stats pour que le nombre de holders 
-        # précis et en temps réel de Etherscan/SolanaTracker écrase celui de GoPlus.
-        merged: dict[str, Any] = {
-            **snapshot,
-            **goplus_security,
-            **contract_analysis,
-            **holder_stats,
-            "chain": chain,
-            "token_age_days": token_age_days,
-            "snapshot_provider": snapshot_result.provider,
-            "provider_errors": snapshot_result.errors,
-        }
-        
-        # Le risk_scorer doit analyser merged["is_honeypot"] pour ajouter des points de risque lourds
+
+        # Fusion intelligente : on part du snapshot (prix, liquidité, volume)
+        # puis on enrichit avec GoPlus, Etherscan contract et Etherscan holders.
+        # Les valeurs None ne remplacent jamais une valeur réelle.
+        # Priorité la plus haute = holder_stats (le plus récent / le plus précis).
+        merged: dict[str, Any] = _merge_non_none(
+            snapshot,
+            goplus_security,
+            contract_analysis,
+            holder_stats,
+        )
+
+        # Champs calculés / override explicite
+        merged["chain"] = chain
+        merged["token_age_days"] = token_age_days
+        merged["snapshot_provider"] = snapshot_result.provider
+        merged["provider_errors"] = snapshot_result.errors
+
+        # Le risk_scorer doit voir is_honeypot pour ajouter des points lourds
         merged["risk"] = score_token(merged).as_dict()
         return merged
 

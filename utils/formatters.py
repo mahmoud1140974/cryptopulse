@@ -1,6 +1,7 @@
 """Formatters for Telegram messages."""
 
 import html
+escape = html.escape
 from typing import Any
 
 

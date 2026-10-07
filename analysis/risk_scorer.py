@@ -76,13 +76,8 @@ def score_token(data: dict[str, Any]) -> RiskResult:
     if not isinstance(data, dict):
         data = {}
 
-    # Chaîne détectée (utilisée pour n'exiger "freeze authority" que sur Solana)
     chain = str(_first(data, ("chain", "blockchain", "network")) or "").strip().lower()
     is_solana = chain == "solana"
-
-    # -----------------------------------------------------------------------
-    # Extraction normalisée des champs (avec alias multiples)
-    # -----------------------------------------------------------------------
 
     liquidity = _float(
         _first(
@@ -162,14 +157,15 @@ def score_token(data: dict[str, Any]) -> RiskResult:
         )
     )
 
-    # Bug 1 fix : on accepte aussi is_renounced / renounced / is_owner_renounced
+    # Ownership : on essaie is_renounced EN PREMIER car c'est le nom
+    # utilisé par GoPlus et par le formatter.
     ownership_renounced = _bool(
         _first(
             data,
             (
-                "ownership_renounced",
                 "is_renounced",
                 "is_owner_renounced",
+                "ownership_renounced",
                 "owner_renounced",
                 "renounced_ownership",
                 "renounced",
@@ -238,7 +234,6 @@ def score_token(data: dict[str, Any]) -> RiskResult:
         )
     )
 
-    # Bug 3 fix : alias multiples pour les taxes + normalisation décimal → %
     buy_tax = _tax_pct(
         _first(
             data,
@@ -400,7 +395,7 @@ def score_token(data: dict[str, Any]) -> RiskResult:
         score += 8
         reasons.append("Proxy or upgradeable contract detected")
 
-    # --- Freeze authority (BUG 4 fix : Solana uniquement) ---
+    # --- Freeze authority (Solana uniquement) ---
     if is_solana:
         if freeze_authority_active is None:
             missing.append("freeze authority")
@@ -495,15 +490,33 @@ def _band(score: int) -> tuple[str, str]:
     return "EXTREME RISK", "🔴"
 
 
+# Valeurs textuelles considérées comme "pas de donnée" même si ce ne sont pas des None
+_PLACEHOLDER_VALUES = {
+    "", "-", "--", "n/a", "na", "unknown", "null", "none", "undefined", "nan",
+}
+
+
 def _first(data: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    """
+    Retourne la première valeur UTILE trouvée parmi les clés données.
+
+    Ignore :
+      - les valeurs None
+      - les chaînes vides
+      - les placeholders textuels ("unknown", "n/a", "-", ...)
+
+    Les valeurs False et 0 restent considérées comme valides (importantes).
+    """
     for key in keys:
         if key not in data:
             continue
         value = data[key]
         if value is None:
             continue
-        if isinstance(value, str) and not value.strip():
-            continue
+        if isinstance(value, str):
+            stripped = value.strip().lower()
+            if stripped in _PLACEHOLDER_VALUES:
+                continue
         return value
     return None
 

@@ -21,6 +21,10 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def utc_now_ts() -> float:
+    return datetime.now(timezone.utc).timestamp()
+
+
 class Database:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -39,6 +43,17 @@ class Database:
         conn = sqlite3.connect(self.sqlite_path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    @staticmethod
+    def _ensure_column(conn: sqlite3.Connection, table: str, column: str, coltype: str = "TEXT") -> None:
+        """Ajoute une colonne si elle n'existe pas (migration SQLite)."""
+        try:
+            cur = conn.execute(f"PRAGMA table_info({table})")
+            cols = [row[1] for row in cur.fetchall()]
+            if column not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+        except Exception:
+            pass
 
     def _init_sqlite_schema(self) -> None:
         with self._connect() as conn:
@@ -87,7 +102,12 @@ class Database:
                 );
                 """
             )
+            # Migration : ajoute premium_until si absent
+            self._ensure_column(conn, "users", "premium_until", "TEXT")
 
+    # ------------------------------------------------------------------
+    # Helpers SQLite
+    # ------------------------------------------------------------------
     async def _sqlite_fetchall(self, query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
         def run() -> list[dict[str, Any]]:
             with self._connect() as conn:
@@ -105,6 +125,9 @@ class Database:
                 conn.execute(query, params)
         await asyncio.to_thread(run)
 
+    # ------------------------------------------------------------------
+    # Users
+    # ------------------------------------------------------------------
     async def get_or_create_user(self, telegram_id: int) -> dict[str, Any]:
         if self.backend == "supabase":
             return await self._supabase_get_or_create_user(telegram_id)
@@ -128,6 +151,65 @@ class Database:
             return inserted.data[0] if inserted.data else payload
         return await asyncio.to_thread(run)
 
+    async def set_user_plan(
+        self,
+        telegram_id: int,
+        plan: str,
+        premium_until: str | None = None,
+    ) -> None:
+        """
+        Met à jour le plan de l'utilisateur et sa date d'expiration.
+        premium_until : ISO datetime UTC, ou None (pas d'expiration).
+        """
+        if self.backend == "supabase":
+            def run() -> None:
+                self.supabase.table("users").update({
+                    "plan": plan,
+                    "premium_until": premium_until,
+                }).eq("telegram_id", telegram_id).execute()
+            await asyncio.to_thread(run)
+            return
+        # S'assurer que l'utilisateur existe
+        await self.get_or_create_user(telegram_id)
+        await self._sqlite_execute(
+            "UPDATE users SET plan = ?, premium_until = ? WHERE telegram_id = ?",
+            (plan, premium_until, telegram_id),
+        )
+
+    async def list_expired_premium_users(self) -> list[dict[str, Any]]:
+        """
+        Renvoie les utilisateurs dont le plan est pro/premium ET dont la date
+        d'expiration est dépassée. À utiliser par le job planifié.
+        """
+        now_iso = datetime.now(timezone.utc).isoformat()
+        if self.backend == "supabase":
+            def run() -> list[dict[str, Any]]:
+                response = (
+                    self.supabase.table("users")
+                    .select("*")
+                    .neq("plan", "free")
+                    .lt("premium_until", now_iso)
+                    .execute()
+                )
+                return [r for r in (response.data or []) if r.get("premium_until")]
+            return await asyncio.to_thread(run)
+        return await self._sqlite_fetchall(
+            """
+            SELECT * FROM users
+            WHERE plan != 'free'
+              AND premium_until IS NOT NULL
+              AND premium_until < ?
+            """,
+            (now_iso,),
+        )
+
+    async def downgrade_to_free(self, telegram_id: int) -> None:
+        """Repasse l'utilisateur en plan Free et efface la date d'expiration."""
+        await self.set_user_plan(telegram_id, "free", None)
+
+    # ------------------------------------------------------------------
+    # Scans
+    # ------------------------------------------------------------------
     async def record_scan(self, telegram_id: int, chain: str, contract_address: str, risk_score: int | None) -> None:
         row = {
             "id": str(uuid.uuid4()),
@@ -164,6 +246,9 @@ class Database:
         )
         return int(row["count"]) if row else 0
 
+    # ------------------------------------------------------------------
+    # Watchlist
+    # ------------------------------------------------------------------
     async def add_watchlist(
         self,
         telegram_id: int,
@@ -286,6 +371,9 @@ class Database:
             (price, liquidity, volume, avg_volume, item_id),
         )
 
+    # ------------------------------------------------------------------
+    # Alerts
+    # ------------------------------------------------------------------
     async def insert_alert(self, telegram_id: int, watchlist_id: str | None, alert_type: str, message: str) -> None:
         row = {
             "id": str(uuid.uuid4()),
@@ -321,6 +409,9 @@ class Database:
             (telegram_id, limit),
         )
 
+    # ------------------------------------------------------------------
+    # Logs
+    # ------------------------------------------------------------------
     async def log_error(self, message: str, level: str = "ERROR") -> None:
         safe_message = message[:1000]
         row = {"id": str(uuid.uuid4()), "level": level, "message": safe_message, "created_at": utc_now()}

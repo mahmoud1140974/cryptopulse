@@ -77,7 +77,10 @@ class TokenAnalyzer:
         self.dexscreener = dexscreener or DexScreenerProvider()
         self.coingecko = coingecko or CoinGeckoProvider(settings.coingecko_api_key)
         self.etherscan = etherscan or EtherscanProvider(settings.etherscan_api_key)
-        self.solana_tracker = solana_tracker or SolanaTrackerProvider(settings.helius_api_key)
+        self.solana_tracker = solana_tracker or SolanaTrackerProvider(
+            helius_api_key=settings.helius_api_key,
+            solana_tracker_api_key=settings.solana_tracker_api_key,
+        )
         self.goplus = goplus or GoPlusProvider()
 
     async def analyze(self, address: str, chain_hint: str | None = None) -> dict[str, Any]:

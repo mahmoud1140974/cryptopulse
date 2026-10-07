@@ -63,17 +63,21 @@ class TokenAnalyzer:
 
         token_age_days = _token_age_days(snapshot.get("pair_created_at"))
         
-        # Fusion de toutes les données
+        # Fusion de toutes les données. 
+        # On met goplus_security AVANT holder_stats pour que le nombre de holders 
+        # précis et en temps réel de Etherscan/SolanaTracker écrase celui de GoPlus.
         merged: dict[str, Any] = {
             **snapshot,
-            **holder_stats,
+            **goplus_security,
             **contract_analysis,
-            **goplus_security,  # Ajout des données de sécurité GoPlus
+            **holder_stats,
             "chain": chain,
             "token_age_days": token_age_days,
             "snapshot_provider": snapshot_result.provider,
             "provider_errors": snapshot_result.errors,
         }
+        
+        # Le risk_scorer doit analyser merged["is_honeypot"] pour ajouter des points de risque lourds
         merged["risk"] = score_token(merged).as_dict()
         return merged
 

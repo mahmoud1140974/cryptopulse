@@ -61,3 +61,13 @@ def back_only() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="⬅️ Back", callback_data="m:back")
     return builder.as_markup()
+
+
+def plans_keyboard() -> InlineKeyboardMarkup:
+    """Boutons d'achat pour la page /subscribe."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="💳 Buy Pro — 385 ⭐", callback_data="buy:pro")
+    builder.button(text="💳 Buy Premium — 1,150 ⭐", callback_data="buy:premium")
+    builder.button(text="⬅️ Back", callback_data="m:back")
+    builder.adjust(1, 1, 1)
+    return builder.as_markup()

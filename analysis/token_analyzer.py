@@ -17,23 +17,47 @@ from providers.solana_tracker import SolanaTrackerProvider
 from utils.validators import validate_address
 
 
+# Valeurs textuelles considérées comme "pas de donnée" même si ce ne sont pas des None
+_PLACEHOLDER_VALUES = {
+    "", "-", "--", "n/a", "na", "unknown", "null", "none", "undefined", "nan",
+}
+
+
+def _is_meaningful(value: Any) -> bool:
+    """
+    Une valeur est 'utile' si elle n'est ni None, ni un placeholder textuel.
+    Permet d'ignorer les réponses "unknown" / "n/a" / "-" d'un provider
+    afin qu'elles n'écrasent pas une vraie valeur venue d'un autre provider.
+    """
+    if value is None:
+        return False
+    if isinstance(value, str) and value.strip().lower() in _PLACEHOLDER_VALUES:
+        return False
+    return True
+
+
 def _merge_non_none(*sources: dict[str, Any] | None) -> dict[str, Any]:
     """
-    Fusionne plusieurs dicts en ignorant les valeurs None.
+    Fusionne plusieurs dicts en ignorant :
+      - les valeurs None
+      - les valeurs textuelles placeholder ("unknown", "n/a", "-", "", ...)
 
-    Règle : la dernière valeur NON-None gagne.
-    Cela évite qu'un provider qui répond "je n'ai pas cette donnée" (None)
-    écrase une valeur réelle fournie par un autre provider.
+    Règle : la dernière valeur UTILE gagne.
+    Cela évite qu'un provider qui répond "unknown" écrase une vraie valeur
+    fournie par un autre provider.
     """
     result: dict[str, Any] = {}
     for source in sources:
         if not source:
             continue
         for key, value in source.items():
-            if value is not None:
+            if _is_meaningful(value):
                 result[key] = value
             elif key not in result:
-                result[key] = None
+                # On garde la première valeur (même placeholder) pour que le
+                # champ existe dans le dict final, mais elle sera écrasée si
+                # un provider ultérieur fournit une vraie valeur.
+                result[key] = value
     return result
 
 
@@ -83,7 +107,8 @@ class TokenAnalyzer:
 
         # Fusion intelligente : on part du snapshot (prix, liquidité, volume)
         # puis on enrichit avec GoPlus, Etherscan contract et Etherscan holders.
-        # Les valeurs None ne remplacent jamais une valeur réelle.
+        # Les valeurs None ET les placeholders ("unknown", "n/a", ...) ne
+        # remplacent jamais une valeur réelle.
         # Priorité la plus haute = holder_stats (le plus récent / le plus précis).
         merged: dict[str, Any] = _merge_non_none(
             snapshot,

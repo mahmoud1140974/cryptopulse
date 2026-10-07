@@ -45,7 +45,8 @@ async def create_app_components(settings: Settings):
         dp.include_router(router)
 
     alert_engine = AlertEngine(db, analyzer, bot=bot)
-    scheduler = AlertScheduler(settings, alert_engine)
+    # On passe explicitement db au scheduler pour le job d'expiration des abonnements
+    scheduler = AlertScheduler(settings, alert_engine, db=db)
     return bot, dp, db, scheduler
 
 

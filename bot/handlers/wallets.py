@@ -9,21 +9,13 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
 from bot.keyboards import back_only, wallets_keyboard
-from config import Settings
+from config import Settings, get_plan_limits
 from database.models import Database
 from providers.wallet_provider import WalletProvider
 from utils.formatters import escape
 from utils.validators import validate_address
 
 router = Router(name="wallets")
-
-
-# Limites par plan
-WALLET_LIMITS = {
-    "free": 0,        # Wallet tracking = Premium only
-    "pro": 3,
-    "premium": 20,
-}
 
 
 def _plan_of(user: dict | None) -> str:
@@ -37,11 +29,10 @@ def _is_admin(user_id: int, settings: Settings) -> bool:
 
 
 def _detect_chain(address: str) -> str:
-    """Détecte une chaîne à partir du format d'adresse."""
     validation = validate_address(address)
     if validation.chain == "solana":
         return "solana"
-    return "ethereum"  # défaut EVM
+    return "ethereum"
 
 
 def _short(addr: str) -> str:
@@ -99,15 +90,18 @@ async def trackwallet_handler(
     plan = _plan_of(user)
     is_admin = _is_admin(message.from_user.id, settings)
 
-    limit = WALLET_LIMITS.get(plan, 0)
+    limits = get_plan_limits(plan)
+    limit = limits.get("wallets_max", 0)
     if is_admin:
-        limit = 999  # bypass admin
+        limit = 999
 
     if limit <= 0:
         await message.answer(
-            "🔒 <b>Wallet tracking is a Premium feature.</b>\n\n"
-            "Upgrade to Premium to track up to 20 wallets and get real-time alerts.\n\n"
-            "Use /subscribe to see plans.",
+            "🔒 <b>Wallet tracking is a Pro & Premium feature.</b>\n\n"
+            "Track smart money wallets and get alerts when they make a move.\n\n"
+            "⭐ <b>Pro</b> — track up to 3 wallets (~$5/month)\n"
+            "👑 <b>Premium</b> — track up to 20 wallets (~$15/month)\n\n"
+            "Use /subscribe to see all plans.",
             parse_mode="HTML",
             reply_markup=back_only(),
         )
@@ -116,8 +110,11 @@ async def trackwallet_handler(
     count = await db.count_tracked_wallets(message.from_user.id)
     if count >= limit:
         await message.answer(
-            f"⚠️ You have reached your limit ({limit} wallets).\n\n"
-            "Remove one with /untrackwallet or upgrade your plan.",
+            f"⚠️ <b>Wallet tracking limit reached</b>\n\n"
+            f"You're tracking <b>{count}/{limit}</b> wallets.\n\n"
+            "Remove one with /untrackwallet or upgrade your plan.\n\n"
+            "Use /subscribe to see all plans.",
+            parse_mode="HTML",
             reply_markup=back_only(),
         )
         return
@@ -126,7 +123,8 @@ async def trackwallet_handler(
     await message.answer(
         f"✅ <b>Wallet added to your tracking list.</b>\n\n"
         f"👛 <code>{address}</code>\n"
-        f"⛓ Chain: <b>{chain.capitalize()}</b>\n\n"
+        f"⛓ Chain: <b>{chain.capitalize()}</b>\n"
+        f"📊 Tracked: <b>{count + 1}/{limit}</b>\n\n"
         f"You'll be alerted when this wallet makes a move.\n"
         f"See your list with /mywallets.",
         parse_mode="HTML",
@@ -138,8 +136,19 @@ async def trackwallet_handler(
 # /mywallets
 # ---------------------------------------------------------------------------
 @router.message(Command("mywallets"))
-async def mywallets_handler(message: Message, db: Database) -> None:
-    items = await db.list_tracked_wallets(message.from_user.id, limit=50)
+async def mywallets_handler(
+    message: Message,
+    db: Database,
+    settings: Settings,
+) -> None:
+    user = await db.get_or_create_user(message.from_user.id)
+    plan = _plan_of(user)
+    limits = get_plan_limits(plan)
+    limit = limits.get("wallets_max", 0)
+    if _is_admin(message.from_user.id, settings):
+        limit = 999
+
+    items = await db.list_tracked_wallets(message.from_user.id, limit=100)
     if not items:
         await message.answer(
             "👛 <b>Your tracked wallets</b>\n\n"
@@ -150,7 +159,8 @@ async def mywallets_handler(message: Message, db: Database) -> None:
         )
         return
 
-    lines = [f"👛 <b>Your tracked wallets</b> — {len(items)} total\n"]
+    limit_str = "∞" if limit >= 999 else str(limit)
+    lines = [f"👛 <b>Your tracked wallets</b> — {len(items)}/{limit_str}\n"]
     for i, w in enumerate(items, start=1):
         label = w.get("label") or ""
         addr = w.get("address") or ""
@@ -260,11 +270,13 @@ async def checkwallet_handler(
             direction = "🔄 Tx"
 
         method = tx.get("method") or "transfer"
+        if len(method) > 40:
+            method = method[:37] + "..."
         value = tx.get("value_native") or 0
         when = _format_ts(tx.get("timestamp"))
         is_error = tx.get("is_error")
 
-        line = f"{i}. {direction} — <b>{method}</b>"
+        line = f"{i}. {direction} — <b>{escape(method)}</b>"
         if value:
             line += f"\n   Amount: {value:.4f} native"
         line += f"\n   {when}"

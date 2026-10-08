@@ -16,29 +16,32 @@ PLANS = {
     "free": {
         "name": "Free",
         "price": "Free",
-        "scans": "10 per day",
+        "scans": "20 / month",
         "watchlist": "5 tokens",
         "alerts": "every 15 min",
-        "wallet": "No",
-        "whales": "No",
+        "wallets": "❌ Not included",
+        "whales": "❌ Not included",
+        "history": "7 days",
     },
     "pro": {
         "name": "Pro",
         "price": "~$5 / month (385 ⭐)",
-        "scans": "100 per day",
-        "watchlist": "25 tokens",
+        "scans": "50 / day",
+        "watchlist": "15 tokens",
         "alerts": "every 5 min",
-        "wallet": "Yes",
-        "whales": "No",
+        "wallets": "✅ 3 wallets",
+        "whales": "❌ Not included",
+        "history": "30 days",
     },
     "premium": {
         "name": "Premium",
         "price": "~$15 / month (1,150 ⭐)",
         "scans": "Unlimited",
-        "watchlist": "100 tokens",
+        "watchlist": "200 tokens",
         "alerts": "every 1 min",
-        "wallet": "Yes",
-        "whales": "Yes",
+        "wallets": "✅ 20 wallets",
+        "whales": "✅ Yes",
+        "history": "Unlimited",
     },
 }
 
@@ -51,6 +54,9 @@ def _plans_text() -> str:
     lines.append(f"   • Scans: {free['scans']}")
     lines.append(f"   • Watchlist: {free['watchlist']}")
     lines.append(f"   • Alerts: {free['alerts']}")
+    lines.append(f"   • Wallet tracking: {free['wallets']}")
+    lines.append(f"   • Whale tracking: {free['whales']}")
+    lines.append(f"   • History: {free['history']}")
     lines.append("")
 
     pro = PLANS["pro"]
@@ -58,7 +64,9 @@ def _plans_text() -> str:
     lines.append(f"   • Scans: {pro['scans']}")
     lines.append(f"   • Watchlist: {pro['watchlist']}")
     lines.append(f"   • Alerts: {pro['alerts']}")
-    lines.append(f"   • Wallet analysis: {pro['wallet']}")
+    lines.append(f"   • Wallet tracking: {pro['wallets']}")
+    lines.append(f"   • Whale tracking: {pro['whales']}")
+    lines.append(f"   • History: {pro['history']}")
     lines.append("")
 
     prem = PLANS["premium"]
@@ -66,8 +74,9 @@ def _plans_text() -> str:
     lines.append(f"   • Scans: {prem['scans']}")
     lines.append(f"   • Watchlist: {prem['watchlist']}")
     lines.append(f"   • Alerts: {prem['alerts']}")
-    lines.append(f"   • Wallet analysis: {prem['wallet']}")
+    lines.append(f"   • Wallet tracking: {prem['wallets']}")
     lines.append(f"   • Whale tracking: {prem['whales']}")
+    lines.append(f"   • History: {prem['history']}")
     lines.append("")
 
     lines.append("💳 <i>Pay with Telegram Stars. Use the buttons below.</i>")
@@ -76,7 +85,6 @@ def _plans_text() -> str:
 
 
 def _get_plan_key(user) -> str:
-    """Récupère le plan de l'utilisateur, quoi qu'il arrive."""
     try:
         if isinstance(user, dict):
             plan = user.get("plan")
@@ -124,13 +132,16 @@ async def mysubscription_handler(message: Message, db: Database) -> None:
         f"Price: {plan['price']}\n"
     )
     if expires and plan_key != "free":
-        text += f"⏰ Expires on: <b>{expires[:10]}</b>\n"
+        text += f"⏰ Expires on: <b>{str(expires)[:10]}</b>\n"
 
     text += (
         "\n<b>Current limits:</b>\n"
         f"• Scans: {plan['scans']}\n"
         f"• Watchlist: {plan['watchlist']}\n"
-        f"• Alerts: {plan['alerts']}\n\n"
+        f"• Alerts: {plan['alerts']}\n"
+        f"• Wallet tracking: {plan['wallets']}\n"
+        f"• Whale tracking: {plan['whales']}\n"
+        f"• History: {plan['history']}\n\n"
         "Use /subscribe to see upgrade options."
     )
     await message.answer(text, parse_mode="HTML", reply_markup=back_only())

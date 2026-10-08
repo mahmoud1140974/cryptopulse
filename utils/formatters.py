@@ -47,7 +47,6 @@ def _format_tax(tax: Any) -> str:
         t = float(tax)
     except (TypeError, ValueError):
         return "N/A"
-    # Si la valeur est <= 1, c'est probablement un décimal
     pct = t * 100 if t <= 1 else t
     if pct.is_integer():
         return f"{int(pct)}%"
@@ -163,12 +162,17 @@ def format_token_report(analysis: dict[str, Any]) -> str:
                 f"👑 <b>Ownership:</b> NOT renounced ⚠️ (owner: {short_owner})"
             )
 
+    # Freeze Authority : uniquement pour Solana.
+    # - True  → actif
+    # - False → désactivé
+    # - None  → on n'affiche RIEN (pas de donnée)
     if str(chain_raw).lower() == "solana":
-        freeze_auth = _get(analysis, "freeze_authority")
-        if freeze_auth:
+        freeze_auth = _get(analysis, "freeze_authority_active", "freeze_authority")
+        if freeze_auth is True:
             lines.append("🥶 <b>Freeze Authority:</b> Active ⚠️")
-        else:
+        elif freeze_auth is False:
             lines.append("🥶 <b>Freeze Authority:</b> Disabled ✅")
+        # Si None : ligne absente (mieux que "Unknown")
 
     lines.append(
         "\n⚠️ <i>Crypto assets are highly risky. Always do your own research before trading.</i>"

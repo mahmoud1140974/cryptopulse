@@ -80,7 +80,6 @@ class TokenAnalyzer:
         snapshot = snapshot_result.data
         chain = snapshot.get("chain") or chain_hint or family
 
-        # Récupération parallèle : holders + contrat + GoPlus
         holder_task = self._safe_call(self._get_holder_stats(address, chain, family))
         contract_task = self._safe_call(self._get_contract_analysis(address, chain, family))
         goplus_task = self._safe_call(self._get_goplus_security(address, chain, family))
@@ -129,46 +128,40 @@ class TokenAnalyzer:
 
     async def _get_snapshot_solana(self, address: str):
         """
-        Pour Solana, on appelle SolanaTracker ET DexScreener EN PARALLÈLE.
+        Pour Solana : appels PARALLÈLES à SolanaTracker (sécurité) et
+        DexScreener (market data). Fusion intelligente :
+        - Base : SolanaTracker (freeze_authority, holder_count, etc.)
+        - Écrase : DexScreener (prix, liquidité, volume, market cap)
 
-        - DexScreener → prix, liquidité, volume, market cap (données de marché)
-        - SolanaTracker → freeze_authority_active, holder_count (données sécurité)
-
-        Puis on fusionne : market data de DexScreener prioritaires, security
-        data de SolanaTracker non écrasées.
+        Résultat : le meilleur des deux providers.
         """
-        st_result = await self._safe_call(self.solana_tracker.get_token_snapshot(address))
-        dx_result = await self._safe_call(self.dexscreener.get_token_snapshot(address))
+        st_result, dx_result = await asyncio.gather(
+            self._safe_call(self.solana_tracker.get_token_snapshot(address)),
+            self._safe_call(self.dexscreener.get_token_snapshot(address)),
+        )
 
         st = st_result or {}
         dx = dx_result or {}
+        errors: list[str] = []
 
-        if not st and not dx:
-            # Aucun provider n'a répondu : on renvoie un dict minimal pour ne pas crash
-            return SimpleNamespace(
-                data={"chain": "solana", "address": address},
-                provider="solana_tracker+dexscreener",
-                errors=["All Solana providers failed"],
-            )
+        if not st:
+            errors.append("solana_tracker failed")
+        if not dx:
+            errors.append("dexscreener failed")
 
-        # 1. Base = DexScreener (market data)
+        # 1. Base = SolanaTracker
         merged: dict[str, Any] = {}
+        for k, v in st.items():
+            if _is_meaningful(v):
+                merged[k] = v
+
+        # 2. Écrase avec DexScreener (market data prioritaire)
         for k, v in dx.items():
             if _is_meaningful(v):
                 merged[k] = v
 
-        # 2. Enrichissement = SolanaTracker, sauf pour les champs market
-        #    où DexScreener est prioritaire s'il a déjà fourni une valeur.
-        market_keys = {
-            "price_usd", "liquidity_usd", "volume_24h_usd", "market_cap_usd",
-            "pair_created_at", "name", "symbol",
-        }
-        for k, v in st.items():
-            if not _is_meaningful(v):
-                continue
-            if k in market_keys and k in merged and _is_meaningful(merged.get(k)):
-                continue
-            merged[k] = v
+        if not merged:
+            merged = {"chain": "solana", "address": address}
 
         merged.setdefault("chain", "solana")
         merged.setdefault("address", address)
@@ -176,7 +169,7 @@ class TokenAnalyzer:
         return SimpleNamespace(
             data=merged,
             provider="solana_tracker+dexscreener",
-            errors=[],
+            errors=errors,
         )
 
     async def _get_holder_stats(self, address: str, chain: str, family: str) -> dict[str, Any]:

@@ -10,6 +10,7 @@ from bot.handlers import (
     scan,
     start,
     subscription,
+    wallets,
     watchlist,
 )
 
@@ -23,5 +24,6 @@ def get_routers() -> list[Router]:
         market.router,
         subscription.router,
         payments.router,
+        wallets.router,
         help.router,
     ]

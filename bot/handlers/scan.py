@@ -23,6 +23,11 @@ class ScanStates(StatesGroup):
     waiting_for_contract = State()
 
 
+def _is_admin(user_id: int, settings: Settings) -> bool:
+    """L'admin du bot a un accès illimité (aucune limite de scans)."""
+    return bool(settings.admin_telegram_id and user_id == settings.admin_telegram_id)
+
+
 async def perform_scan(
     message: Message,
     user_id: int,
@@ -42,17 +47,20 @@ async def perform_scan(
         return
 
     await db.get_or_create_user(user_id)
-    scans_today = await db.count_scans_today(user_id)
-    if scans_today >= settings.free_scan_limit:
-        text = (
-            f"⚠️ Free scan limit reached ({settings.free_scan_limit}/day).\n\n"
-            "Upgrade options will be available in Phase 3."
-        )
-        if edit:
-            await message.edit_text(text, reply_markup=back_only())
-        else:
-            await message.answer(text, reply_markup=back_only())
-        return
+
+    # Bypass admin : pas de limite de scans
+    if not _is_admin(user_id, settings):
+        scans_today = await db.count_scans_today(user_id)
+        if scans_today >= settings.free_scan_limit:
+            text = (
+                f"⚠️ Free scan limit reached ({settings.free_scan_limit}/day).\n\n"
+                "Use /subscribe to see upgrade options."
+            )
+            if edit:
+                await message.edit_text(text, parse_mode="HTML", reply_markup=back_only())
+            else:
+                await message.answer(text, parse_mode="HTML", reply_markup=back_only())
+            return
 
     try:
         analysis = await analyzer.analyze(address)
@@ -62,9 +70,13 @@ async def perform_scan(
             address,
             analysis.get("risk", {}).get("score"),
         )
-        tracked = await _is_tracked(db, user_id, analysis.get("chain") or validation.chain or "unknown", address)
+        tracked = await _is_tracked(
+            db, user_id, analysis.get("chain") or validation.chain or "unknown", address
+        )
         text = format_token_report(analysis)
-        keyboard = result_actions(analysis.get("chain") or validation.chain or "unknown", address, tracked=tracked)
+        keyboard = result_actions(
+            analysis.get("chain") or validation.chain or "unknown", address, tracked=tracked
+        )
         if edit:
             await message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
         else:
@@ -106,7 +118,10 @@ async def scan_command(
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2:
         await state.set_state(ScanStates.waiting_for_contract)
-        await message.answer("🔍 Send me the token contract address you want to scan.", reply_markup=back_only())
+        await message.answer(
+            "🔍 Send me the token contract address you want to scan.",
+            reply_markup=back_only(),
+        )
         return
     await state.clear()
     await perform_scan(message, message.from_user.id, parts[1].strip(), db, analyzer, settings)
@@ -121,7 +136,9 @@ async def scan_from_state(
     state: FSMContext,
 ) -> None:
     await state.clear()
-    await perform_scan(message, message.from_user.id, (message.text or "").strip(), db, analyzer, settings)
+    await perform_scan(
+        message, message.from_user.id, (message.text or "").strip(), db, analyzer, settings
+    )
 
 
 @router.message(lambda message: validate_address(message.text or "").is_valid)
@@ -131,7 +148,9 @@ async def scan_from_plain_address(
     analyzer: TokenAnalyzer,
     settings: Settings,
 ) -> None:
-    await perform_scan(message, message.from_user.id, (message.text or "").strip(), db, analyzer, settings)
+    await perform_scan(
+        message, message.from_user.id, (message.text or "").strip(), db, analyzer, settings
+    )
 
 
 @router.callback_query(lambda callback: callback.data and callback.data.startswith("r:"))
@@ -142,10 +161,15 @@ async def refresh_scan(
     settings: Settings,
 ) -> None:
     _, chain, address = callback.data.split(":", 2)
-    await perform_scan(callback.message, callback.from_user.id, address, db, analyzer, settings, edit=True)
+    await perform_scan(
+        callback.message, callback.from_user.id, address, db, analyzer, settings, edit=True
+    )
     await callback.answer()
 
 
 async def _is_tracked(db: Database, telegram_id: int, chain: str, address: str) -> bool:
     items = await db.list_watchlist(telegram_id, limit=100)
-    return any(item.get("chain") == chain and item.get("contract_address") == address for item in items)
+    return any(
+        item.get("chain") == chain and item.get("contract_address") == address
+        for item in items
+    )

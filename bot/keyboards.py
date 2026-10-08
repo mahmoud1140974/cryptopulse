@@ -9,10 +9,10 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 def main_menu() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="🔍 Scan Token", callback_data="m:scan")
-    builder.button(text="👛 Analyze Wallet (PRO)", callback_data="m:wallet")
+    builder.button(text="👛 Analyze Wallet", callback_data="m:wallet")
     builder.button(text="📊 Market", callback_data="m:market")
     builder.button(text="🔥 Trending", callback_data="m:trending")
-    builder.button(text="🐋 Whales (PRO)", callback_data="m:whales")
+    builder.button(text="🐋 Whales", callback_data="m:whales")
     builder.button(text="🔔 Alerts", callback_data="m:alerts")
     builder.button(text="⭐ Watchlist", callback_data="m:watchlist")
     builder.button(text="📰 News", callback_data="m:news")
@@ -36,10 +36,19 @@ def result_actions(chain: str, address: str, tracked: bool = False) -> InlineKey
     return builder.as_markup()
 
 
-def watchlist_keyboard(items: list[dict], page: int = 0, page_size: int = 5, total: int | None = None) -> InlineKeyboardMarkup:
+def watchlist_keyboard(
+    items: list[dict],
+    page: int = 0,
+    page_size: int = 5,
+    total: int | None = None,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for item in items:
-        label = item.get("symbol") or item.get("name") or item.get("contract_address", "Token")[:8]
+        label = (
+            item.get("symbol")
+            or item.get("name")
+            or item.get("contract_address", "Token")[:8]
+        )
         builder.button(text=f"🔍 {label}", callback_data=f"ws:{item['id']}")
         builder.button(text=f"🗑 Remove {label}", callback_data=f"wr:{item['id']}")
 
@@ -79,4 +88,27 @@ def wallets_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="👛 My wallets", callback_data="w:list")
     builder.button(text="⬅️ Back", callback_data="m:back")
     builder.adjust(1, 1)
+    return builder.as_markup()
+
+
+def languages_keyboard() -> InlineKeyboardMarkup:
+    """Clavier de choix de langue (premier démarrage)."""
+    from locales import LANG_LABELS
+
+    builder = InlineKeyboardBuilder()
+    for code, label in LANG_LABELS.items():
+        builder.button(text=label, callback_data=f"lang:{code}")
+    builder.adjust(2, 2, 2, 2)
+    return builder.as_markup()
+
+
+def change_language_keyboard() -> InlineKeyboardMarkup:
+    """Clavier de changement de langue (depuis /language)."""
+    from locales import LANG_LABELS
+
+    builder = InlineKeyboardBuilder()
+    for code, label in LANG_LABELS.items():
+        builder.button(text=label, callback_data=f"setlang:{code}")
+    builder.button(text="⬅️ Back", callback_data="m:back")
+    builder.adjust(2, 2, 2, 2, 1)
     return builder.as_markup()

@@ -114,6 +114,7 @@ class Database:
                 """
             )
             self._ensure_column(conn, "users", "premium_until", "TEXT")
+            self._ensure_column(conn, "users", "language", "TEXT")
 
     # ------------------------------------------------------------------
     # Helpers SQLite
@@ -160,6 +161,28 @@ class Database:
             inserted = self.supabase.table("users").insert(payload).execute()
             return inserted.data[0] if inserted.data else payload
         return await asyncio.to_thread(run)
+
+    async def set_user_language(self, telegram_id: int, language: str) -> None:
+        """Enregistre la langue préférée de l'utilisateur."""
+        if self.backend == "supabase":
+            def run() -> None:
+                self.supabase.table("users").update({
+                    "language": language,
+                }).eq("telegram_id", telegram_id).execute()
+            await asyncio.to_thread(run)
+            return
+        await self.get_or_create_user(telegram_id)
+        await self._sqlite_execute(
+            "UPDATE users SET language = ? WHERE telegram_id = ?",
+            (language, telegram_id),
+        )
+
+    async def get_user_language(self, telegram_id: int) -> str | None:
+        """Récupère la langue enregistrée (None si jamais choisie)."""
+        user = await self.get_or_create_user(telegram_id)
+        if not user:
+            return None
+        return user.get("language")
 
     async def set_user_plan(
         self,
@@ -330,15 +353,15 @@ class Database:
                 return response.count or 0
             return await asyncio.to_thread(run)
         row = await self._sqlite_fetchone("SELECT COUNT(*) AS count FROM watchlist WHERE telegram_id = ?", (telegram_id,))
-        return int(row["count"]) if row else 0
+ .        return int(row["counteq"]) if row else 0
 
-    async def list_watchlist(self, telegram_id: int, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+   (" async def list_watchlist(self, telegramtele_id: int, limit: int =gram 100, offset: int = 0)_id -> list[dict[str, Any]]:
         if self.backend == "supabase":
             def run() -> list[dict[str, Any]]:
                 response = (
                     self.supabase.table("watchlist")
                     .select("*")
-                    .eq("telegram_id", telegram_id)
+                   ", telegram_id)
                     .order("created_at", desc=True)
                     .range(offset, offset + limit - 1)
                     .execute()

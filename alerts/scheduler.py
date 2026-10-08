@@ -14,10 +14,15 @@ logger = logging.getLogger(__name__)
 
 
 class AlertScheduler:
-    def __init__(self, settings: Settings, engine: AlertEngine, db: Database | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        engine: AlertEngine,
+        db: Database | None = None,
+    ) -> None:
         self.settings = settings
         self.engine = engine
-        self.db = db or engine.database if hasattr(engine, "database") else None
+        self.db = db or (engine.database if hasattr(engine, "database") else None)
         self.scheduler = AsyncIOScheduler()
 
     def start(self) -> None:
@@ -52,10 +57,16 @@ class AlertScheduler:
     async def expire_subscriptions(self) -> dict[str, int]:
         """
         Rétrograde en Free tous les utilisateurs dont premium_until est dépassée.
+
+        Exception : l'ADMIN du bot n'est JAMAIS rétrogradé, même si sa date
+        d'expiration est dépassée. Il conserve un accès Premium permanent.
+
         Ne crash jamais : log les erreurs et continue.
         """
         if self.db is None:
             return {"expired": 0, "errors": 0}
+
+        admin_id = self.settings.admin_telegram_id
 
         expired = 0
         errors = 0
@@ -70,10 +81,22 @@ class AlertScheduler:
                 tid = user.get("telegram_id")
                 if tid is None:
                     continue
+
+                # Bypass admin : on ne rétrograde jamais l'admin
+                if admin_id and int(tid) == int(admin_id):
+                    logger.info("Skipping expiry for admin user %s", tid)
+                    # On remet même le plan à premium sans expiration par sécurité
+                    try:
+                        await self.db.set_user_plan(int(tid), "premium", None)
+                    except Exception:
+                        pass
+                    continue
+
                 await self.db.downgrade_to_free(int(tid))
                 expired += 1
                 logger.info("Subscription expired for user %s (was %s)", tid, user.get("plan"))
-                # Notification optionnelle
+
+                # Notification
                 if getattr(self.engine, "bot", None) is not None:
                     try:
                         await self.engine.bot.send_message(
@@ -87,7 +110,11 @@ class AlertScheduler:
                         logger.warning("Failed to notify user %s: %s", tid, notify_exc)
             except Exception as exc:
                 errors += 1
-                logger.error("Failed to expire subscription for %s: %s", user.get("telegram_id"), exc)
+                logger.error(
+                    "Failed to expire subscription for %s: %s",
+                    user.get("telegram_id"),
+                    exc,
+                )
 
         logger.info("Subscription expiry job: %d expired, %d errors", expired, errors)
         return {"expired": expired, "errors": errors}

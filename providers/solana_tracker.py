@@ -43,6 +43,11 @@ class SolanaTrackerProvider(BaseProvider):
         token = data.get("token") or data
         pools = data.get("pools") or []
         primary_pool = pools[0] if pools else {}
+
+        # Freeze authority : sur Solana, si le champ est absent/null → désactivé
+        freeze_raw = token.get("freezeAuthority") or data.get("freezeAuthority")
+        freeze_active = _freeze_to_bool(freeze_raw)
+
         return {
             "provider": self.name,
             "address": address,
@@ -50,13 +55,19 @@ class SolanaTrackerProvider(BaseProvider):
             "name": token.get("name"),
             "symbol": token.get("symbol"),
             "price_usd": _float(token.get("price") or primary_pool.get("priceUsd")),
-            "liquidity_usd": _float(primary_pool.get("liquidityUsd") or data.get("liquidity")),
-            "volume_24h_usd": _float(primary_pool.get("volume24h") or data.get("volume24h")),
-            "market_cap_usd": _float(token.get("marketCap") or data.get("marketCap")),
-            "holder_count": _int(token.get("holders") or data.get("holders")),
-            "freeze_authority_active": _bool_or_none(
-                token.get("freezeAuthority") or data.get("freezeAuthority")
+            "liquidity_usd": _float(
+                primary_pool.get("liquidityUsd") or data.get("liquidity")
             ),
+            "volume_24h_usd": _float(
+                primary_pool.get("volume24h") or data.get("volume24h")
+            ),
+            "market_cap_usd": _float(
+                token.get("marketCap") or data.get("marketCap")
+            ),
+            "holder_count": _int(token.get("holders") or data.get("holders")),
+            # On renvoie les DEUX alias pour le scorer ET le formatter
+            "freeze_authority_active": freeze_active,
+            "freeze_authority": freeze_raw,
             "pair_created_at": primary_pool.get("createdAt") or token.get("createdAt"),
         }
 
@@ -70,10 +81,14 @@ class SolanaTrackerProvider(BaseProvider):
         if not holders:
             logger.warning("solana_tracker holder data unavailable for %s", address)
             raise ProviderError("Solana holder data unavailable")
-        percentages = [_float(item.get("percentage") or item.get("pct")) for item in holders]
+        percentages = [
+            _float(item.get("percentage") or item.get("pct")) for item in holders
+        ]
         percentages = [item for item in percentages if item is not None]
         if not percentages:
-            logger.warning("solana_tracker holder percentages unavailable for %s", address)
+            logger.warning(
+                "solana_tracker holder percentages unavailable for %s", address
+            )
             raise ProviderError("Solana holder percentages unavailable")
         return {
             "holder_count": len(holders),
@@ -108,9 +123,27 @@ class SolanaTrackerProvider(BaseProvider):
             logger.error("solana_tracker Helius request failed: %s", safe_error)
             raise ProviderError(f"Helius request failed: {safe_error}") from exc
         if "error" in data:
-            logger.error("solana_tracker Helius RPC returned an error: %s", data["error"])
+            logger.error(
+                "solana_tracker Helius RPC returned an error: %s", data["error"]
+            )
             raise ProviderError(str(data["error"]))
         return data
+
+
+def _freeze_to_bool(value: Any) -> bool:
+    """
+    Convertit une valeur 'freeze authority' Solana en booléen.
+
+    Sur Solana, si le champ est absent ou null → pas de freeze authority = False.
+    Si c'est une adresse (string non vide) → autorité active = True.
+    """
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() not in {"", "none", "null", "false", "0"}
+    return bool(value)
 
 
 def _float(value: Any) -> float | None:
@@ -129,13 +162,3 @@ def _int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
-
-
-def _bool_or_none(value: Any) -> bool | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.lower() not in {"", "none", "null", "false", "0"}
-    return bool(value)

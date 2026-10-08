@@ -9,49 +9,6 @@ from typing import Any
 INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
 
 
-# ---------------------------------------------------------------------------
-# Points model (higher score = higher risk). Final score is capped at 0..100.
-#
-# Market / liquidity
-#   liquidity < $10k       +18
-#   liquidity < $50k       +10
-#   liquidity < $250k      +4
-#   volume < $1k           +8
-#   volume < $10k          +4
-#   market cap < $100k     +8
-#   market cap < $1M       +4
-#
-# Token age
-#   age < 1 day            +12
-#   age < 7 days           +8
-#   age < 30 days          +4
-#
-# Holder concentration
-#   top10 > 80%            +25
-#   top10 > 50%            +18
-#   top10 > 30%            +8
-#
-# Contract / security
-#   honeypot               +50
-#   freeze authority       +20  (Solana uniquement)
-#   mint function          +15
-#   blacklist function     +10
-#   unverified contract    +10
-#   ownership active       +8
-#   proxy/upgradeable      +8
-#   tax > 20%              +18
-#   tax > 10%              +12
-#
-# Data completeness guardrails
-#   only one data category available       +25
-#   two categories, no security data       +12
-#   two categories, missing holder/market  +5
-#
-# Missing fields are listed as "Unknown: ..." in reasons.
-# If no risk-relevant fields exist, the result band is INSUFFICIENT_DATA.
-# ---------------------------------------------------------------------------
-
-
 @dataclass(slots=True)
 class RiskResult:
     score: int
@@ -79,206 +36,85 @@ def score_token(data: dict[str, Any]) -> RiskResult:
     chain = str(_first(data, ("chain", "blockchain", "network")) or "").strip().lower()
     is_solana = chain == "solana"
 
-    liquidity = _float(
-        _first(
-            data,
-            (
-                "liquidity_usd",
-                "liquidity",
-                "liquidityUsd",
-                "total_liquidity_usd",
-                "value_locked_usd",
-            ),
-        )
-    )
+    # -----------------------------------------------------------------------
+    # Extraction normalisée des champs
+    # -----------------------------------------------------------------------
+    liquidity = _float(_first(data, (
+        "liquidity_usd", "liquidity", "liquidityUsd",
+        "total_liquidity_usd", "value_locked_usd",
+    )))
 
-    volume = _float(
-        _first(
-            data,
-            (
-                "volume_24h_usd",
-                "volume24h_usd",
-                "volume_usd",
-                "volume_24h",
-                "volume",
-            ),
-        )
-    )
+    volume = _float(_first(data, (
+        "volume_24h_usd", "volume24h_usd", "volume_usd",
+        "volume_24h", "volume",
+    )))
 
-    market_cap = _float(
-        _first(
-            data,
-            (
-                "market_cap_usd",
-                "marketCap",
-                "market_cap",
-                "fdv_usd",
-                "fdv",
-            ),
-        )
-    )
+    market_cap = _float(_first(data, (
+        "market_cap_usd", "marketCap", "market_cap", "fdv_usd", "fdv",
+    )))
 
-    age_days = _float(
-        _first(
-            data,
-            (
-                "token_age_days",
-                "age_days",
-                "token_age",
-                "age",
-                "days_since_creation",
-                "created_days",
-            ),
-        )
-    )
+    age_days = _float(_first(data, (
+        "token_age_days", "age_days", "token_age",
+        "age", "days_since_creation", "created_days",
+    )))
 
-    top10 = _pct(
-        _first(
-            data,
-            (
-                "top10_holder_pct",
-                "top10_holders_pct",
-                "top_10_holder_pct",
-                "top_10_holders_pct",
-                "top10_holders_percentage",
-            ),
-        )
-    )
+    top10 = _pct(_first(data, (
+        "top10_holder_pct", "top10_holders_pct",
+        "top_10_holder_pct", "top_10_holders_pct",
+        "top10_holders_percentage",
+    )))
 
-    verified = _bool(
-        _first(
-            data,
-            (
-                "contract_verified",
-                "verified",
-                "is_verified",
-                "source_verified",
-            ),
-        )
-    )
+    # --- Champs EVM uniquement ---
+    verified = _bool(_first(data, (
+        "contract_verified", "verified", "is_verified", "source_verified",
+    ))) if not is_solana else None
 
-    # Ownership : on essaie is_renounced EN PREMIER car c'est le nom
-    # utilisé par GoPlus et par le formatter.
-    ownership_renounced = _bool(
-        _first(
-            data,
-            (
-                "is_renounced",
-                "is_owner_renounced",
-                "ownership_renounced",
-                "owner_renounced",
-                "renounced_ownership",
-                "renounced",
-            ),
-        )
-    )
+    ownership_renounced = _bool(_first(data, (
+        "is_renounced", "is_owner_renounced", "ownership_renounced",
+        "owner_renounced", "renounced_ownership", "renounced",
+    ))) if not is_solana else None
 
-    has_mint = _bool(
-        _first(
-            data,
-            (
-                "has_mint",
-                "mintable",
-                "is_mintable",
-                "can_mint",
-                "has_mint_function",
-            ),
-        )
-    )
+    has_mint = _bool(_first(data, (
+        "has_mint", "mintable", "is_mintable", "can_mint", "has_mint_function",
+    ))) if not is_solana else None
 
-    has_blacklist = _bool(
-        _first(
-            data,
-            (
-                "has_blacklist",
-                "blacklistable",
-                "is_blacklisted",
-                "can_blacklist",
-                "has_blacklist_function",
-            ),
-        )
-    )
+    has_blacklist = _bool(_first(data, (
+        "has_blacklist", "blacklistable", "is_blacklisted",
+        "can_blacklist", "has_blacklist_function",
+    ))) if not is_solana else None
 
-    is_honeypot = _bool(
-        _first(
-            data,
-            (
-                "is_honeypot",
-                "honeypot",
-                "honeypot_detected",
-            ),
-        )
-    )
+    is_honeypot = _bool(_first(data, (
+        "is_honeypot", "honeypot", "honeypot_detected",
+    ))) if not is_solana else None
 
-    is_proxy = _bool(
-        _first(
-            data,
-            (
-                "is_proxy",
-                "is_proxy_contract",
-                "proxy",
-                "upgradeable",
-                "is_upgradeable",
-            ),
-        )
-    )
+    is_proxy = _bool(_first(data, (
+        "is_proxy", "is_proxy_contract", "proxy",
+        "upgradeable", "is_upgradeable",
+    ))) if not is_solana else None
 
-    freeze_authority_active = _bool(
-        _first(
-            data,
-            (
-                "freeze_authority_active",
-                "freeze_authority",
-                "freezable",
-            ),
-        )
-    )
+    # --- Champs Solana uniquement ---
+    freeze_authority_active = _bool(_first(data, (
+        "freeze_authority_active", "freeze_authority", "freezable",
+    ))) if is_solana else None
 
-    buy_tax = _tax_pct(
-        _first(
-            data,
-            (
-                "buy_tax_pct",
-                "buy_tax",
-                "tax_buy_pct",
-                "buyTax",
-                "buy_tax_percent",
-                "buy_fee",
-            ),
-        )
-    )
+    # --- Champs communs ---
+    buy_tax = _tax_pct(_first(data, (
+        "buy_tax_pct", "buy_tax", "tax_buy_pct",
+        "buyTax", "buy_tax_percent", "buy_fee",
+    )))
 
-    sell_tax = _tax_pct(
-        _first(
-            data,
-            (
-                "sell_tax_pct",
-                "sell_tax",
-                "tax_sell_pct",
-                "sellTax",
-                "sell_tax_percent",
-                "sell_fee",
-            ),
-        )
-    )
+    sell_tax = _tax_pct(_first(data, (
+        "sell_tax_pct", "sell_tax", "tax_sell_pct",
+        "sellTax", "sell_tax_percent", "sell_fee",
+    )))
 
     has_any_data = any(
         value is not None
         for value in (
-            liquidity,
-            volume,
-            market_cap,
-            age_days,
-            top10,
-            verified,
-            ownership_renounced,
-            has_mint,
-            has_blacklist,
-            is_honeypot,
-            is_proxy,
-            freeze_authority_active if is_solana else None,
-            buy_tax,
-            sell_tax,
+            liquidity, volume, market_cap, age_days, top10,
+            verified, ownership_renounced, has_mint, has_blacklist,
+            is_honeypot, is_proxy, freeze_authority_active,
+            buy_tax, sell_tax,
         )
     )
 
@@ -353,47 +189,43 @@ def score_token(data: dict[str, Any]) -> RiskResult:
         score += 8
         reasons.append(f"Top 10 holders control {top10:.2f}% of supply")
 
-    # --- Vérification du contrat ---
-    if verified is None:
-        missing.append("contract verification")
-    elif verified is False:
-        score += 10
-        reasons.append("Contract source is not verified")
+    # --- Champs EVM uniquement (contrat, honeypot, proxy, etc.) ---
+    if not is_solana:
+        if verified is None:
+            missing.append("contract verification")
+        elif verified is False:
+            score += 10
+            reasons.append("Contract source is not verified")
 
-    # --- Ownership ---
-    if ownership_renounced is None:
-        missing.append("ownership renouncement")
-    elif ownership_renounced is False:
-        score += 8
-        reasons.append("Contract ownership has not been renounced")
+        if ownership_renounced is None:
+            missing.append("ownership renouncement")
+        elif ownership_renounced is False:
+            score += 8
+            reasons.append("Contract ownership has not been renounced")
 
-    # --- Mint function ---
-    if has_mint is None:
-        missing.append("mint function")
-    elif has_mint is True:
-        score += 15
-        reasons.append("Mint function detected in contract")
+        if has_mint is None:
+            missing.append("mint function")
+        elif has_mint is True:
+            score += 15
+            reasons.append("Mint function detected in contract")
 
-    # --- Blacklist function ---
-    if has_blacklist is None:
-        missing.append("blacklist function")
-    elif has_blacklist is True:
-        score += 10
-        reasons.append("Blacklist function detected in contract")
+        if has_blacklist is None:
+            missing.append("blacklist function")
+        elif has_blacklist is True:
+            score += 10
+            reasons.append("Blacklist function detected in contract")
 
-    # --- Honeypot ---
-    if is_honeypot is None:
-        missing.append("honeypot check")
-    elif is_honeypot is True:
-        score += 50
-        reasons.append("Honeypot detected")
+        if is_honeypot is None:
+            missing.append("honeypot check")
+        elif is_honeypot is True:
+            score += 50
+            reasons.append("Honeypot detected")
 
-    # --- Proxy / upgradeable ---
-    if is_proxy is None:
-        missing.append("proxy/upgradeable check")
-    elif is_proxy is True:
-        score += 8
-        reasons.append("Proxy or upgradeable contract detected")
+        if is_proxy is None:
+            missing.append("proxy/upgradeable check")
+        elif is_proxy is True:
+            score += 8
+            reasons.append("Proxy or upgradeable contract detected")
 
     # --- Freeze authority (Solana uniquement) ---
     if is_solana:
@@ -403,7 +235,7 @@ def score_token(data: dict[str, Any]) -> RiskResult:
             score += 20
             reasons.append("Solana freeze authority is active")
 
-    # --- Buy/sell tax ---
+    # --- Buy/sell tax (commun, souvent absent sur Solana) ---
     if buy_tax is None and sell_tax is None:
         missing.append("buy/sell tax")
     else:
@@ -425,7 +257,6 @@ def score_token(data: dict[str, Any]) -> RiskResult:
                 score += 18
             else:
                 score += 12
-
             reasons.append("High token tax detected (" + ", ".join(tax_bits) + ")")
 
     # --- Data completeness guardrail ---
@@ -433,20 +264,18 @@ def score_token(data: dict[str, Any]) -> RiskResult:
         value is not None for value in (liquidity, volume, market_cap, age_days)
     )
     holder_known = top10 is not None
-    security_known = any(
-        value is not None
-        for value in (
-            verified,
-            ownership_renounced,
-            has_mint,
-            has_blacklist,
-            is_honeypot,
-            is_proxy,
-            freeze_authority_active if is_solana else None,
-            buy_tax,
-            sell_tax,
+
+    if is_solana:
+        # Sur Solana, la seule donnée de "security" est freeze_authority_active.
+        security_known = freeze_authority_active is not None
+    else:
+        security_known = any(
+            value is not None
+            for value in (
+                verified, ownership_renounced, has_mint, has_blacklist,
+                is_honeypot, is_proxy, buy_tax, sell_tax,
+            )
         )
-    )
 
     categories_known = sum(
         1 for flag in (market_known, holder_known, security_known) if flag
@@ -490,23 +319,12 @@ def _band(score: int) -> tuple[str, str]:
     return "EXTREME RISK", "🔴"
 
 
-# Valeurs textuelles considérées comme "pas de donnée" même si ce ne sont pas des None
 _PLACEHOLDER_VALUES = {
     "", "-", "--", "n/a", "na", "unknown", "null", "none", "undefined", "nan",
 }
 
 
 def _first(data: dict[str, Any], keys: tuple[str, ...]) -> Any:
-    """
-    Retourne la première valeur UTILE trouvée parmi les clés données.
-
-    Ignore :
-      - les valeurs None
-      - les chaînes vides
-      - les placeholders textuels ("unknown", "n/a", "-", ...)
-
-    Les valeurs False et 0 restent considérées comme valides (importantes).
-    """
     for key in keys:
         if key not in data:
             continue
@@ -545,12 +363,6 @@ def _pct(value: Any) -> float | None:
 
 
 def _tax_pct(value: Any) -> float | None:
-    """
-    Normalise une taxe en pourcentage.
-
-    GoPlus renvoie souvent un décimal (0.05 = 5%). Certains providers renvoient
-    déjà un pourcentage (5 = 5%). On gère les deux cas.
-    """
     result = _float(value)
     if result is None:
         return None

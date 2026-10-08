@@ -71,3 +71,12 @@ def plans_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="⬅️ Back", callback_data="m:back")
     builder.adjust(1, 1, 1)
     return builder.as_markup()
+
+
+def wallets_keyboard() -> InlineKeyboardMarkup:
+    """Clavier affiché dans le menu Wallet."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="👛 My wallets", callback_data="w:list")
+    builder.button(text="⬅️ Back", callback_data="m:back")
+    builder.adjust(1, 1)
+    return builder.as_markup()

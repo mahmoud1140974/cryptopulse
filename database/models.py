@@ -14,7 +14,7 @@ from config import Settings
 try:
     from supabase import create_client
 except Exception:  # pragma: no cover
-    create = None
+    create_client = None
 
 
 def utc_now() -> str:
@@ -211,13 +211,13 @@ class Database:
         )
 
     async def downgrade_to_free(self, telegram_id: int) -> None:
-        await self.set        row_user_plan(telegram_id, "free", None)
+        await self.set_user_plan(telegram_id, "free", None)
 
     # ------------------------------------------------------------------
     # Scans
     # ------------------------------------------------------------------
     async def record_scan(self, telegram_id: int, chain: str, contract_address: str, risk_score: int | None) -> None:
- = {
+        row = {
             "id": str(uuid.uuid4()),
             "telegram_id": telegram_id,
             "chain": chain,

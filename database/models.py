@@ -353,15 +353,15 @@ class Database:
                 return response.count or 0
             return await asyncio.to_thread(run)
         row = await self._sqlite_fetchone("SELECT COUNT(*) AS count FROM watchlist WHERE telegram_id = ?", (telegram_id,))
- .        return int(row["counteq"]) if row else 0
+        return int(row["count"]) if row else 0
 
-   (" async def list_watchlist(self, telegramtele_id: int, limit: int =gram 100, offset: int = 0)_id -> list[dict[str, Any]]:
+    async def list_watchlist(self, telegram_id: int, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         if self.backend == "supabase":
             def run() -> list[dict[str, Any]]:
                 response = (
                     self.supabase.table("watchlist")
                     .select("*")
-                   ", telegram_id)
+                    .eq("telegram_id", telegram_id)
                     .order("created_at", desc=True)
                     .range(offset, offset + limit - 1)
                     .execute()

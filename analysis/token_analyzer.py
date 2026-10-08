@@ -17,18 +17,12 @@ from providers.solana_tracker import SolanaTrackerProvider
 from utils.validators import validate_address
 
 
-# Valeurs textuelles considérées comme "pas de donnée" même si ce ne sont pas des None
 _PLACEHOLDER_VALUES = {
     "", "-", "--", "n/a", "na", "unknown", "null", "none", "undefined", "nan",
 }
 
 
 def _is_meaningful(value: Any) -> bool:
-    """
-    Une valeur est 'utile' si elle n'est ni None, ni un placeholder textuel.
-    Permet d'ignorer les réponses "unknown" / "n/a" / "-" d'un provider
-    afin qu'elles n'écrasent pas une vraie valeur venue d'un autre provider.
-    """
     if value is None:
         return False
     if isinstance(value, str) and value.strip().lower() in _PLACEHOLDER_VALUES:
@@ -38,13 +32,8 @@ def _is_meaningful(value: Any) -> bool:
 
 def _merge_non_none(*sources: dict[str, Any] | None) -> dict[str, Any]:
     """
-    Fusionne plusieurs dicts en ignorant :
-      - les valeurs None
-      - les valeurs textuelles placeholder ("unknown", "n/a", "-", "", ...)
-
-    Règle : la dernière valeur UTILE gagne.
-    Cela évite qu'un provider qui répond "unknown" écrase une vraie valeur
-    fournie par un autre provider.
+    Fusionne plusieurs dicts en ignorant les valeurs None ET les placeholders.
+    La dernière valeur UTILE gagne (les derniers écrase les premiers).
     """
     result: dict[str, Any] = {}
     for source in sources:
@@ -54,9 +43,6 @@ def _merge_non_none(*sources: dict[str, Any] | None) -> dict[str, Any]:
             if _is_meaningful(value):
                 result[key] = value
             elif key not in result:
-                # On garde la première valeur (même placeholder) pour que le
-                # champ existe dans le dict final, mais elle sera écrasée si
-                # un provider ultérieur fournit une vraie valeur.
                 result[key] = value
     return result
 
@@ -108,11 +94,8 @@ class TokenAnalyzer:
 
         token_age_days = _token_age_days(snapshot.get("pair_created_at"))
 
-        # Fusion intelligente : on part du snapshot (prix, liquidité, volume)
-        # puis on enrichit avec GoPlus, Etherscan contract et Etherscan holders.
-        # Les valeurs None ET les placeholders ("unknown", "n/a", ...) ne
-        # remplacent jamais une valeur réelle.
-        # Priorité la plus haute = holder_stats (le plus récent / le plus précis).
+        # Fusion : snapshot d'abord, puis enrichissement par les autres providers.
+        # Les valeurs réelles écrasent les placeholders.
         merged: dict[str, Any] = _merge_non_none(
             snapshot,
             goplus_security,
@@ -120,13 +103,11 @@ class TokenAnalyzer:
             holder_stats,
         )
 
-        # Champs calculés / override explicite
         merged["chain"] = chain
         merged["token_age_days"] = token_age_days
         merged["snapshot_provider"] = snapshot_result.provider
         merged["provider_errors"] = snapshot_result.errors
 
-        # Le risk_scorer doit voir is_honeypot pour ajouter des points lourds
         merged["risk"] = score_token(merged).as_dict()
         return merged
 
@@ -138,10 +119,17 @@ class TokenAnalyzer:
         return result.data
 
     async def _get_snapshot(self, address: str, family: str, chain_hint: str | None):
+        """
+        Récupère le snapshot de marché.
+
+        IMPORTANT pour Solana : SolanaTracker est appelé en PREMIER car c'est
+        lui qui fournit freeze_authority_active, holder_count, etc. DexScreener
+        sert de fallback si SolanaTracker échoue.
+        """
         if family == "solana":
             calls = [
-                ("dexscreener", lambda: self.dexscreener.get_token_snapshot(address)),
                 ("solana_tracker", lambda: self.solana_tracker.get_token_snapshot(address)),
+                ("dexscreener", lambda: self.dexscreener.get_token_snapshot(address)),
             ]
         else:
             calls = [

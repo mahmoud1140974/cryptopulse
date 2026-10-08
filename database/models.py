@@ -14,7 +14,7 @@ from config import Settings
 try:
     from supabase import create_client
 except Exception:  # pragma: no cover
-    create_client = None
+    create = None
 
 
 def utc_now() -> str:
@@ -100,6 +100,17 @@ class Database:
                     message TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS tracked_wallets (
+                    id TEXT PRIMARY KEY,
+                    telegram_id INTEGER NOT NULL,
+                    address TEXT NOT NULL,
+                    chain TEXT NOT NULL DEFAULT 'ethereum',
+                    label TEXT,
+                    last_tx_hash TEXT,
+                    last_tx_time TEXT,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(telegram_id, address, chain)
+                );
                 """
             )
             # Migration : ajoute premium_until si absent
@@ -169,7 +180,6 @@ class Database:
                 }).eq("telegram_id", telegram_id).execute()
             await asyncio.to_thread(run)
             return
-        # S'assurer que l'utilisateur existe
         await self.get_or_create_user(telegram_id)
         await self._sqlite_execute(
             "UPDATE users SET plan = ?, premium_until = ? WHERE telegram_id = ?",
@@ -177,10 +187,7 @@ class Database:
         )
 
     async def list_expired_premium_users(self) -> list[dict[str, Any]]:
-        """
-        Renvoie les utilisateurs dont le plan est pro/premium ET dont la date
-        d'expiration est dépassée. À utiliser par le job planifié.
-        """
+        """Utilisateurs premium dont la date d'expiration est dépassée."""
         now_iso = datetime.now(timezone.utc).isoformat()
         if self.backend == "supabase":
             def run() -> list[dict[str, Any]]:
@@ -204,14 +211,13 @@ class Database:
         )
 
     async def downgrade_to_free(self, telegram_id: int) -> None:
-        """Repasse l'utilisateur en plan Free et efface la date d'expiration."""
-        await self.set_user_plan(telegram_id, "free", None)
+        await self.set        row_user_plan(telegram_id, "free", None)
 
     # ------------------------------------------------------------------
     # Scans
     # ------------------------------------------------------------------
     async def record_scan(self, telegram_id: int, chain: str, contract_address: str, risk_score: int | None) -> None:
-        row = {
+ = {
             "id": str(uuid.uuid4()),
             "telegram_id": telegram_id,
             "chain": chain,
@@ -407,6 +413,159 @@ class Database:
         return await self._sqlite_fetchall(
             "SELECT * FROM alerts WHERE telegram_id = ? ORDER BY created_at DESC LIMIT ?",
             (telegram_id, limit),
+        )
+
+    # ------------------------------------------------------------------
+    # Tracked wallets (Wallet Tracking — Premium feature)
+    # ------------------------------------------------------------------
+    async def add_tracked_wallet(
+        self,
+        telegram_id: int,
+        address: str,
+        chain: str = "ethereum",
+        label: str | None = None,
+    ) -> dict[str, Any]:
+        """Ajoute un wallet à suivre pour un utilisateur."""
+        existing = await self.get_tracked_wallet(telegram_id, address, chain)
+        if existing:
+            return existing
+
+        row = {
+            "id": str(uuid.uuid4()),
+            "telegram_id": telegram_id,
+            "address": address,
+            "chain": chain,
+            "label": label,
+            "created_at": utc_now(),
+        }
+        if self.backend == "supabase":
+            await asyncio.to_thread(
+                lambda: self.supabase.table("tracked_wallets").insert(row).execute()
+            )
+            return row
+
+        await self._sqlite_execute(
+            """
+            INSERT INTO tracked_wallets (id, telegram_id, address, chain, label, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (row["id"], telegram_id, address, chain, label, row["created_at"]),
+        )
+        return row
+
+    async def get_tracked_wallet(
+        self,
+        telegram_id: int,
+        address: str,
+        chain: str = "ethereum",
+    ) -> dict[str, Any] | None:
+        if self.backend == "supabase":
+            def run() -> dict[str, Any] | None:
+                response = (
+                    self.supabase.table("tracked_wallets")
+                    .select("*")
+                    .eq("telegram_id", telegram_id)
+                    .eq("address", address)
+                    .eq("chain", chain)
+                    .execute()
+                )
+                return response.data[0] if response.data else None
+            return await asyncio.to_thread(run)
+        return await self._sqlite_fetchone(
+            "SELECT * FROM tracked_wallets WHERE telegram_id = ? AND address = ? AND chain = ?",
+            (telegram_id, address, chain),
+        )
+
+    async def list_tracked_wallets(
+        self,
+        telegram_id: int,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        if self.backend == "supabase":
+            def run() -> list[dict[str, Any]]:
+                response = (
+                    self.supabase.table("tracked_wallets")
+                    .select("*")
+                    .eq("telegram_id", telegram_id)
+                    .order("created_at", desc=True)
+                    .limit(limit)
+                    .execute()
+                )
+                return response.data or []
+            return await asyncio.to_thread(run)
+        return await self._sqlite_fetchall(
+            "SELECT * FROM tracked_wallets WHERE telegram_id = ? ORDER BY created_at DESC LIMIT ?",
+            (telegram_id, limit),
+        )
+
+    async def list_all_tracked_wallets(self) -> list[dict[str, Any]]:
+        """Utilisé par le job d'alerte pour surveiller tous les wallets."""
+        if self.backend == "supabase":
+            def run() -> list[dict[str, Any]]:
+                response = self.supabase.table("tracked_wallets").select("*").execute()
+                return response.data or []
+            return await asyncio.to_thread(run)
+        return await self._sqlite_fetchall("SELECT * FROM tracked_wallets")
+
+    async def count_tracked_wallets(self, telegram_id: int) -> int:
+        if self.backend == "supabase":
+            def run() -> int:
+                response = (
+                    self.supabase.table("tracked_wallets")
+                    .select("id", count="exact")
+                    .eq("telegram_id", telegram_id)
+                    .execute()
+                )
+                return response.count or 0
+            return await asyncio.to_thread(run)
+        row = await self._sqlite_fetchone(
+            "SELECT COUNT(*) AS count FROM tracked_wallets WHERE telegram_id = ?",
+            (telegram_id,),
+        )
+        return int(row["count"]) if row else 0
+
+    async def remove_tracked_wallet(
+        self,
+        telegram_id: int,
+        address: str,
+        chain: str = "ethereum",
+    ) -> None:
+        if self.backend == "supabase":
+            await asyncio.to_thread(
+                lambda: self.supabase.table("tracked_wallets")
+                .delete()
+                .eq("telegram_id", telegram_id)
+                .eq("address", address)
+                .eq("chain", chain)
+                .execute()
+            )
+            return
+        await self._sqlite_execute(
+            "DELETE FROM tracked_wallets WHERE telegram_id = ? AND address = ? AND chain = ?",
+            (telegram_id, address, chain),
+        )
+
+    async def update_wallet_snapshot(
+        self,
+        wallet_id: str,
+        last_tx_hash: str | None,
+        last_tx_time: str | None,
+    ) -> None:
+        payload = {
+            "last_tx_hash": last_tx_hash,
+            "last_tx_time": last_tx_time,
+        }
+        if self.backend == "supabase":
+            await asyncio.to_thread(
+                lambda: self.supabase.table("tracked_wallets")
+                .update(payload)
+                .eq("id", wallet_id)
+                .execute()
+            )
+            return
+        await self._sqlite_execute(
+            "UPDATE tracked_wallets SET last_tx_hash = ?, last_tx_time = ? WHERE id = ?",
+            (last_tx_hash, last_tx_time, wallet_id),
         )
 
     # ------------------------------------------------------------------

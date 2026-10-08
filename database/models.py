@@ -113,7 +113,6 @@ class Database:
                 );
                 """
             )
-            # Migration : ajoute premium_until si absent
             self._ensure_column(conn, "users", "premium_until", "TEXT")
 
     # ------------------------------------------------------------------
@@ -168,10 +167,6 @@ class Database:
         plan: str,
         premium_until: str | None = None,
     ) -> None:
-        """
-        Met à jour le plan de l'utilisateur et sa date d'expiration.
-        premium_until : ISO datetime UTC, ou None (pas d'expiration).
-        """
         if self.backend == "supabase":
             def run() -> None:
                 self.supabase.table("users").update({
@@ -187,7 +182,6 @@ class Database:
         )
 
     async def list_expired_premium_users(self) -> list[dict[str, Any]]:
-        """Utilisateurs premium dont la date d'expiration est dépassée."""
         now_iso = datetime.now(timezone.utc).isoformat()
         if self.backend == "supabase":
             def run() -> list[dict[str, Any]]:
@@ -249,6 +243,31 @@ class Database:
         row = await self._sqlite_fetchone(
             "SELECT COUNT(*) AS count FROM scans WHERE telegram_id = ? AND created_at >= ?",
             (telegram_id, today),
+        )
+        return int(row["count"]) if row else 0
+
+    async def count_scans_this_month(self, telegram_id: int) -> int:
+        """Compte le nombre de scans pour le mois en cours (UTC)."""
+        now = datetime.now(timezone.utc)
+        first_of_month = now.replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        ).isoformat()
+
+        if self.backend == "supabase":
+            def run() -> int:
+                response = (
+                    self.supabase.table("scans")
+                    .select("id", count="exact")
+                    .eq("telegram_id", telegram_id)
+                    .gte("created_at", first_of_month)
+                    .execute()
+                )
+                return response.count or 0
+            return await asyncio.to_thread(run)
+
+        row = await self._sqlite_fetchone(
+            "SELECT COUNT(*) AS count FROM scans WHERE telegram_id = ? AND created_at >= ?",
+            (telegram_id, first_of_month),
         )
         return int(row["count"]) if row else 0
 
@@ -416,7 +435,7 @@ class Database:
         )
 
     # ------------------------------------------------------------------
-    # Tracked wallets (Wallet Tracking — Premium feature)
+    # Tracked wallets
     # ------------------------------------------------------------------
     async def add_tracked_wallet(
         self,
@@ -425,7 +444,6 @@ class Database:
         chain: str = "ethereum",
         label: str | None = None,
     ) -> dict[str, Any]:
-        """Ajoute un wallet à suivre pour un utilisateur."""
         existing = await self.get_tracked_wallet(telegram_id, address, chain)
         if existing:
             return existing
@@ -499,7 +517,6 @@ class Database:
         )
 
     async def list_all_tracked_wallets(self) -> list[dict[str, Any]]:
-        """Utilisé par le job d'alerte pour surveiller tous les wallets."""
         if self.backend == "supabase":
             def run() -> list[dict[str, Any]]:
                 response = self.supabase.table("tracked_wallets").select("*").execute()

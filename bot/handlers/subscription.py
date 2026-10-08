@@ -1,4 +1,4 @@
-"""Subscription handlers: /subscribe and /mysubscription."""
+"""Subscription handlers: /subscribe and /mysubscription (multilingual)."""
 
 from __future__ import annotations
 
@@ -7,80 +7,106 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
 from bot.keyboards import back_only, plans_keyboard
+from config import Settings
 from database.models import Database
+from locales import DEFAULT_LANG, is_supported, t
 
 router = Router(name="subscription")
 
 
 PLANS = {
     "free": {
-        "name": "Free",
-        "price": "Free",
-        "scans": "20 / month",
-        "watchlist": "5 tokens",
-        "alerts": "every 15 min",
-        "wallets": "❌ Not included",
-        "whales": "❌ Not included",
-        "history": "7 days",
+        "name_key": "🆓 Free",
+        "price_key": "Free",
+        "scans_key": "20 / month",
+        "watchlist_key": "5 tokens",
+        "alerts_key": "15 min",
+        "wallets_key": "❌ Not included",
+        "whales_key": "❌ Not included",
+        "history_key": "7 days",
     },
     "pro": {
-        "name": "Pro",
-        "price": "~$5 / month (385 ⭐)",
-        "scans": "50 / day",
-        "watchlist": "15 tokens",
-        "alerts": "every 5 min",
-        "wallets": "✅ 3 wallets",
-        "whales": "❌ Not included",
-        "history": "30 days",
+        "name_key": "⭐ Pro",
+        "price_key": "~$5 / month (385 ⭐)",
+        "scans_key": "50 / day",
+        "watchlist_key": "15 tokens",
+        "alerts_key": "5 min",
+        "wallets_key": "✅ 3 wallets",
+        "whales_key": "❌ Not included",
+        "history_key": "30 days",
     },
     "premium": {
-        "name": "Premium",
-        "price": "~$15 / month (1,150 ⭐)",
-        "scans": "Unlimited",
-        "watchlist": "200 tokens",
-        "alerts": "every 1 min",
-        "wallets": "✅ 20 wallets",
-        "whales": "✅ Yes",
-        "history": "Unlimited",
+        "name_key": "👑 Premium",
+        "price_key": "~$15 / month (1,150 ⭐)",
+        "scans_key": "Unlimited",
+        "watchlist_key": "200 tokens",
+        "alerts_key": "1 min",
+        "wallets_key": "✅ 20 wallets",
+        "whales_key": "✅ Yes",
+        "history_key": "Unlimited",
     },
 }
 
 
-def _plans_text() -> str:
-    lines = ["💎 <b>CryptoPulse Plans</b>", ""]
+def _plans_text(lang: str) -> str:
+    lines = [t("subscribe_title", lang), ""]
 
-    free = PLANS["free"]
-    lines.append(f"🆓 <b>{free['name']}</b> — {free['price']}")
-    lines.append(f"   • Scans: {free['scans']}")
-    lines.append(f"   • Watchlist: {free['watchlist']}")
-    lines.append(f"   • Alerts: {free['alerts']}")
-    lines.append(f"   • Wallet tracking: {free['wallets']}")
-    lines.append(f"   • Whale tracking: {free['whales']}")
-    lines.append(f"   • History: {free['history']}")
-    lines.append("")
+    labels = {
+        "en": {
+            "scans": "Scans", "watchlist": "Watchlist", "alerts": "Alerts",
+            "wallets": "Wallet tracking", "whales": "Whale tracking", "history": "History",
+            "pay": "💳 <i>Pay with Telegram Stars. Use the buttons below.</i>",
+        },
+        "fr": {
+            "scans": "Scans", "watchlist": "Watchlist", "alerts": "Alertes",
+            "wallets": "Suivi wallet", "whales": "Suivi baleines", "history": "Historique",
+            "pay": "💳 <i>Payez avec Telegram Stars. Utilisez les boutons ci-dessous.</i>",
+        },
+        "es": {
+            "scans": "Escaneos", "watchlist": "Lista", "alerts": "Alertas",
+            "wallets": "Wallets", "whales": "Ballenas", "history": "Historial",
+            "pay": "💳 <i>Paga con Telegram Stars. Usa los botones debajo.</i>",
+        },
+        "pt": {
+            "scans": "Escaneamentos", "watchlist": "Lista", "alerts": "Alertas",
+            "wallets": "Carteiras", "whales": "Baleias", "history": "Histórico",
+            "pay": "💳 <i>Pague com Telegram Stars. Use os botões abaixo.</i>",
+        },
+        "ar": {
+            "scans": "الفحوصات", "watchlist": "قائمة المتابعة", "alerts": "التنبيهات",
+            "wallets": "متابعة المحافظ", "whales": "متابعة الحيتان", "history": "السجل",
+            "pay": "💳 <i>ادفع عبر Telegram Stars. استخدم الأزرار أدناه.</i>",
+        },
+        "ru": {
+            "scans": "Сканирования", "watchlist": "Список", "alerts": "Оповещения",
+            "wallets": "Кошельки", "whales": "Киты", "history": "История",
+            "pay": "💳 <i>Оплатите через Telegram Stars. Используйте кнопки ниже.</i>",
+        },
+        "id": {
+            "scans": "Pemindaian", "watchlist": "Daftar", "alerts": "Peringatan",
+            "wallets": "Wallet", "whales": "Paus", "history": "Riwayat",
+            "pay": "💳 <i>Bayar dengan Telegram Stars. Gunakan tombol di bawah.</i>",
+        },
+        "tr": {
+            "scans": "Taramalar", "watchlist": "İzleme", "alerts": "Uyarılar",
+            "wallets": "Cüzdanlar", "whales": "Balinalar", "history": "Geçmiş",
+            "pay": "💳 <i>Telegram Stars ile ödeyin. Aşağıdaki butonları kullanın.</i>",
+        },
+    }
+    L = labels.get(lang, labels["en"])
 
-    pro = PLANS["pro"]
-    lines.append(f"⭐ <b>{pro['name']}</b> — {pro['price']}")
-    lines.append(f"   • Scans: {pro['scans']}")
-    lines.append(f"   • Watchlist: {pro['watchlist']}")
-    lines.append(f"   • Alerts: {pro['alerts']}")
-    lines.append(f"   • Wallet tracking: {pro['wallets']}")
-    lines.append(f"   • Whale tracking: {pro['whales']}")
-    lines.append(f"   • History: {pro['history']}")
-    lines.append("")
+    for key in ("free", "pro", "premium"):
+        p = PLANS[key]
+        lines.append(f"<b>{p['name_key']}</b> — {p['price_key']}")
+        lines.append(f"   • {L['scans']}: {p['scans_key']}")
+        lines.append(f"   • {L['watchlist']}: {p['watchlist_key']}")
+        lines.append(f"   • {L['alerts']}: {p['alerts_key']}")
+        lines.append(f"   • {L['wallets']}: {p['wallets_key']}")
+        lines.append(f"   • {L['whales']}: {p['whales_key']}")
+        lines.append(f"   • {L['history']}: {p['history_key']}")
+        lines.append("")
 
-    prem = PLANS["premium"]
-    lines.append(f"👑 <b>{prem['name']}</b> — {prem['price']}")
-    lines.append(f"   • Scans: {prem['scans']}")
-    lines.append(f"   • Watchlist: {prem['watchlist']}")
-    lines.append(f"   • Alerts: {prem['alerts']}")
-    lines.append(f"   • Wallet tracking: {prem['wallets']}")
-    lines.append(f"   • Whale tracking: {prem['whales']}")
-    lines.append(f"   • History: {prem['history']}")
-    lines.append("")
-
-    lines.append("💳 <i>Pay with Telegram Stars. Use the buttons below.</i>")
-
+    lines.append(L["pay"])
     return "\n".join(lines)
 
 
@@ -106,17 +132,27 @@ def _get_expiry(user) -> str | None:
         return None
 
 
+async def _get_lang(telegram_id: int, db: Database) -> str:
+    lang = await db.get_user_language(telegram_id)
+    if lang and is_supported(lang):
+        return lang
+    return DEFAULT_LANG
+
+
 @router.message(Command("subscribe"))
-async def subscribe_handler(message: Message) -> None:
+async def subscribe_handler(message: Message, db: Database) -> None:
+    lang = await _get_lang(message.from_user.id, db)
     await message.answer(
-        _plans_text(),
+        _plans_text(lang),
         parse_mode="HTML",
-        reply_markup=plans_keyboard(),
+        reply_markup=plans_keyboard(lang=lang),
     )
 
 
 @router.message(Command("mysubscription"))
 async def mysubscription_handler(message: Message, db: Database) -> None:
+    lang = await _get_lang(message.from_user.id, db)
+
     try:
         user = await db.get_or_create_user(message.from_user.id)
     except Exception:
@@ -126,32 +162,30 @@ async def mysubscription_handler(message: Message, db: Database) -> None:
     plan = PLANS.get(plan_key, PLANS["free"])
     expires = _get_expiry(user)
 
-    text = (
-        "👤 <b>Your Subscription</b>\n\n"
-        f"Plan: <b>{plan['name']}</b>\n"
-        f"Price: {plan['price']}\n"
-    )
+    text = t("mysubscription_title", lang)
+    text += t("mysubscription_plan", lang, plan=plan["name_key"]) + "\n"
+    text += t("mysubscription_price", lang, price=plan["price_key"]) + "\n"
     if expires and plan_key != "free":
-        text += f"⏰ Expires on: <b>{str(expires)[:10]}</b>\n"
+        text += t("mysubscription_expires", lang, date=str(expires)[:10]) + "\n"
 
-    text += (
-        "\n<b>Current limits:</b>\n"
-        f"• Scans: {plan['scans']}\n"
-        f"• Watchlist: {plan['watchlist']}\n"
-        f"• Alerts: {plan['alerts']}\n"
-        f"• Wallet tracking: {plan['wallets']}\n"
-        f"• Whale tracking: {plan['whales']}\n"
-        f"• History: {plan['history']}\n\n"
-        "Use /subscribe to see upgrade options."
-    )
-    await message.answer(text, parse_mode="HTML", reply_markup=back_only())
+    text += t("mysubscription_limits", lang) + "\n"
+    text += f"• Scans: {plan['scans_key']}\n"
+    text += f"• Watchlist: {plan['watchlist_key']}\n"
+    text += f"• Alerts: {plan['alerts_key']}\n"
+    text += f"• Wallet tracking: {plan['wallets_key']}\n"
+    text += f"• Whale tracking: {plan['whales_key']}\n"
+    text += f"• History: {plan['history_key']}\n"
+    text += t("mysubscription_use", lang)
+
+    await message.answer(text, parse_mode="HTML", reply_markup=back_only(lang=lang))
 
 
 @router.callback_query(lambda callback: callback.data == "m:premium")
-async def premium_callback(callback: CallbackQuery) -> None:
+async def premium_callback(callback: CallbackQuery, db: Database) -> None:
+    lang = await _get_lang(callback.from_user.id, db)
     await callback.message.edit_text(
-        _plans_text(),
+        _plans_text(lang),
         parse_mode="HTML",
-        reply_markup=plans_keyboard(),
+        reply_markup=plans_keyboard(lang=lang),
     )
     await callback.answer()

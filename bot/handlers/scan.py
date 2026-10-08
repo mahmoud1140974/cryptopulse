@@ -10,7 +10,7 @@ from aiogram.types import CallbackQuery, Message
 
 from analysis.token_analyzer import TokenAnalyzer
 from bot.keyboards import back_only, result_actions
-from config import Settings
+from config import Settings, get_plan_limits
 from database.models import Database
 from providers.base import ProviderError
 from utils.formatters import format_token_report
@@ -24,8 +24,56 @@ class ScanStates(StatesGroup):
 
 
 def _is_admin(user_id: int, settings: Settings) -> bool:
-    """L'admin du bot a un accès illimité (aucune limite de scans)."""
     return bool(settings.admin_telegram_id and user_id == settings.admin_telegram_id)
+
+
+async def _check_scan_limit(
+    user_id: int,
+    plan: str,
+    db: Database,
+    settings: Settings,
+) -> tuple[bool, str | None]:
+    """
+    Vérifie si l'utilisateur peut encore scanner.
+    Retourne (peut_scanner, message_d_erreur_si_bloque).
+    """
+    # Bypass admin
+    if _is_admin(user_id, settings):
+        return True, None
+
+    limits = get_plan_limits(plan)
+    monthly_limit = limits.get("scans_per_month")
+    daily_limit = limits.get("scans_per_day")
+
+    # Premium : illimité
+    if monthly_limit is None and daily_limit is None:
+        return True, None
+
+    # Free : limite mensuelle
+    if monthly_limit is not None:
+        used = await db.count_scans_this_month(user_id)
+        if used >= monthly_limit:
+            return False, (
+                f"⚠️ <b>You've reached your monthly limit</b>\n\n"
+                f"You've used <b>{used}/{monthly_limit}</b> free scans this month.\n\n"
+                "Upgrade to keep scanning:\n"
+                "⭐ <b>Pro</b> — 50 scans/day for ~$5/month\n"
+                "👑 <b>Premium</b> — Unlimited scans for ~$15/month\n\n"
+                "Use /subscribe to see all plans."
+            )
+
+    # Pro : limite journalière
+    if daily_limit is not None:
+        used_today = await db.count_scans_today(user_id)
+        if used_today >= daily_limit:
+            return False, (
+                f"⚠️ <b>Daily limit reached</b>\n\n"
+                f"You've used <b>{used_today}/{daily_limit}</b> scans today.\n\n"
+                "Come back tomorrow, or upgrade to Premium for unlimited scans.\n\n"
+                "Use /subscribe to see all plans."
+            )
+
+    return True, None
 
 
 async def perform_scan(
@@ -46,21 +94,17 @@ async def perform_scan(
             await message.answer(text, reply_markup=back_only())
         return
 
-    await db.get_or_create_user(user_id)
+    user = await db.get_or_create_user(user_id)
+    plan = str((user or {}).get("plan") or "free").lower()
 
-    # Bypass admin : pas de limite de scans
-    if not _is_admin(user_id, settings):
-        scans_today = await db.count_scans_today(user_id)
-        if scans_today >= settings.free_scan_limit:
-            text = (
-                f"⚠️ Free scan limit reached ({settings.free_scan_limit}/day).\n\n"
-                "Use /subscribe to see upgrade options."
-            )
-            if edit:
-                await message.edit_text(text, parse_mode="HTML", reply_markup=back_only())
-            else:
-                await message.answer(text, parse_mode="HTML", reply_markup=back_only())
-            return
+    # Vérifie la limite selon le plan
+    allowed, error_message = await _check_scan_limit(user_id, plan, db, settings)
+    if not allowed:
+        if edit:
+            await message.edit_text(error_message, parse_mode="HTML", reply_markup=back_only())
+        else:
+            await message.answer(error_message, parse_mode="HTML", reply_markup=back_only())
+        return
 
     try:
         analysis = await analyzer.analyze(address)

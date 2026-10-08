@@ -12,6 +12,53 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent
 
 
+# ---------------------------------------------------------------------------
+# Limites par plan.
+#
+# Chaque plan définit :
+#   scans_per_month : nombre de scans/mois (None = illimité)
+#   watchlist_max   : nombre max de tokens dans la watchlist
+#   alert_interval  : intervalle entre vérifications d'alertes (en minutes)
+#   wallets_max     : nombre max de wallets à tracker (0 = interdit)
+#   whale_tracking  : accès au whale tracking (booléen)
+#   history_days    : nombre de jours d'historique (None = illimité)
+# ---------------------------------------------------------------------------
+PLAN_LIMITS: dict[str, dict] = {
+    "free": {
+        "scans_per_month": 20,
+        "watchlist_max": 5,
+        "alert_interval": 15,
+        "wallets_max": 0,
+        "whale_tracking": False,
+        "history_days": 7,
+    },
+    "pro": {
+        "scans_per_month": None,      # 50/jour = quasi illimité pour nous
+        "scans_per_day": 50,          # mais on garde une limite par jour
+        "watchlist_max": 15,
+        "alert_interval": 5,
+        "wallets_max": 3,
+        "whale_tracking": False,
+        "history_days": 30,
+    },
+    "premium": {
+        "scans_per_month": None,
+        "scans_per_day": None,        # illimité
+        "watchlist_max": 200,
+        "alert_interval": 1,
+        "wallets_max": 20,
+        "whale_tracking": True,
+        "history_days": None,
+    },
+}
+
+
+def get_plan_limits(plan: str | None) -> dict:
+    """Retourne les limites pour un plan donné. Fallback sur 'free'."""
+    key = (plan or "free").lower()
+    return PLAN_LIMITS.get(key, PLAN_LIMITS["free"])
+
+
 @dataclass(slots=True)
 class Settings:
     bot_token: str | None = None

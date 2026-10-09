@@ -1,4 +1,4 @@
-"""Wallet tracking handlers: /trackwallet, /mywallets, /untrackwallet, /checkwallet."""
+"""Wallet tracking handlers (multilingual)."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, Message
 from bot.keyboards import back_only, wallets_keyboard
 from config import Settings, get_plan_limits
 from database.models import Database
+from locales import DEFAULT_LANG, is_supported, t
 from providers.wallet_provider import WalletProvider
 from utils.formatters import escape
 from utils.validators import validate_address
@@ -18,14 +19,15 @@ from utils.validators import validate_address
 router = Router(name="wallets")
 
 
-def _plan_of(user: dict | None) -> str:
-    if not user:
-        return "free"
-    return str(user.get("plan") or "free").lower()
-
-
 def _is_admin(user_id: int, settings: Settings) -> bool:
     return bool(settings.admin_telegram_id and user_id == settings.admin_telegram_id)
+
+
+async def _get_lang(telegram_id: int, db: Database) -> str:
+    lang = await db.get_user_language(telegram_id)
+    if lang and is_supported(lang):
+        return lang
+    return DEFAULT_LANG
 
 
 def _detect_chain(address: str) -> str:
@@ -51,25 +53,19 @@ def _format_ts(ts: int | None) -> str:
         return "unknown"
 
 
-# ---------------------------------------------------------------------------
-# /trackwallet <address> [chain]
-# ---------------------------------------------------------------------------
 @router.message(Command("trackwallet"))
 async def trackwallet_handler(
     message: Message,
     db: Database,
     settings: Settings,
 ) -> None:
+    lang = await _get_lang(message.from_user.id, db)
     parts = (message.text or "").split()
     if len(parts) < 2:
         await message.answer(
-            "👛 <b>Track a wallet</b>\n\n"
-            "Usage: <code>/trackwallet &lt;address&gt; [chain]</code>\n\n"
-            "Examples:\n"
-            "<code>/trackwallet 0xabc...</code>\n"
-            "<code>/trackwallet DezXAZ... solana</code>",
+            t("wallet_usage_track", lang),
             parse_mode="HTML",
-            reply_markup=back_only(),
+            reply_markup=back_only(lang=lang),
         )
         return
 
@@ -79,70 +75,54 @@ async def trackwallet_handler(
     validation = validate_address(address)
     if not validation.is_valid:
         await message.answer(
-            f"❌ Invalid address. {validation.reason}",
-            reply_markup=back_only(),
+            t("scan_invalid_address", lang, reason=validation.reason),
+            reply_markup=back_only(lang=lang),
         )
         return
 
     chain = chain_hint or _detect_chain(address)
 
     user = await db.get_or_create_user(message.from_user.id)
-    plan = _plan_of(user)
-    is_admin = _is_admin(message.from_user.id, settings)
-
+    plan = str((user or {}).get("plan") or "free").lower()
     limits = get_plan_limits(plan)
     limit = limits.get("wallets_max", 0)
-    if is_admin:
+    if _is_admin(message.from_user.id, settings):
         limit = 999
 
     if limit <= 0:
         await message.answer(
-            "🔒 <b>Wallet tracking is a Pro & Premium feature.</b>\n\n"
-            "Track smart money wallets and get alerts when they make a move.\n\n"
-            "⭐ <b>Pro</b> — track up to 3 wallets (~$5/month)\n"
-            "👑 <b>Premium</b> — track up to 20 wallets (~$15/month)\n\n"
-            "Use /subscribe to see all plans.",
+            t("wallet_locked", lang),
             parse_mode="HTML",
-            reply_markup=back_only(),
+            reply_markup=back_only(lang=lang),
         )
         return
 
     count = await db.count_tracked_wallets(message.from_user.id)
     if count >= limit:
         await message.answer(
-            f"⚠️ <b>Wallet tracking limit reached</b>\n\n"
-            f"You're tracking <b>{count}/{limit}</b> wallets.\n\n"
-            "Remove one with /untrackwallet or upgrade your plan.\n\n"
-            "Use /subscribe to see all plans.",
+            t("wallet_limit_reached", lang, count=count, limit=limit),
             parse_mode="HTML",
-            reply_markup=back_only(),
+            reply_markup=back_only(lang=lang),
         )
         return
 
     await db.add_tracked_wallet(message.from_user.id, address, chain=chain)
     await message.answer(
-        f"✅ <b>Wallet added to your tracking list.</b>\n\n"
-        f"👛 <code>{address}</code>\n"
-        f"⛓ Chain: <b>{chain.capitalize()}</b>\n"
-        f"📊 Tracked: <b>{count + 1}/{limit}</b>\n\n"
-        f"You'll be alerted when this wallet makes a move.\n"
-        f"See your list with /mywallets.",
+        t("wallet_added", lang, address=address, chain=chain.capitalize(), count=count + 1, limit=limit),
         parse_mode="HTML",
-        reply_markup=back_only(),
+        reply_markup=back_only(lang=lang),
     )
 
 
-# ---------------------------------------------------------------------------
-# /mywallets
-# ---------------------------------------------------------------------------
 @router.message(Command("mywallets"))
 async def mywallets_handler(
     message: Message,
     db: Database,
     settings: Settings,
 ) -> None:
+    lang = await _get_lang(message.from_user.id, db)
     user = await db.get_or_create_user(message.from_user.id)
-    plan = _plan_of(user)
+    plan = str((user or {}).get("plan") or "free").lower()
     limits = get_plan_limits(plan)
     limit = limits.get("wallets_max", 0)
     if _is_admin(message.from_user.id, settings):
@@ -151,16 +131,14 @@ async def mywallets_handler(
     items = await db.list_tracked_wallets(message.from_user.id, limit=100)
     if not items:
         await message.answer(
-            "👛 <b>Your tracked wallets</b>\n\n"
-            "No wallets yet.\n\n"
-            "Add one with <code>/trackwallet &lt;address&gt;</code>",
+            t("wallet_list_empty", lang),
             parse_mode="HTML",
-            reply_markup=back_only(),
+            reply_markup=back_only(lang=lang),
         )
         return
 
     limit_str = "∞" if limit >= 999 else str(limit)
-    lines = [f"👛 <b>Your tracked wallets</b> — {len(items)}/{limit_str}\n"]
+    lines = [t("wallet_list_header", lang, count=len(items), limit=limit_str)]
     for i, w in enumerate(items, start=1):
         label = w.get("label") or ""
         addr = w.get("address") or ""
@@ -170,27 +148,24 @@ async def mywallets_handler(
             line += f" ({escape(label)})"
         lines.append(line)
 
-    lines.append("\nUse /checkwallet &lt;address&gt; to see recent activity.")
-    lines.append("Remove one with /untrackwallet &lt;address&gt;.")
+    lines.append(t("wallet_list_footer", lang))
 
     await message.answer(
         "\n".join(lines),
         parse_mode="HTML",
-        reply_markup=back_only(),
+        reply_markup=back_only(lang=lang),
     )
 
 
-# ---------------------------------------------------------------------------
-# /untrackwallet <address> [chain]
-# ---------------------------------------------------------------------------
 @router.message(Command("untrackwallet"))
 async def untrackwallet_handler(message: Message, db: Database) -> None:
+    lang = await _get_lang(message.from_user.id, db)
     parts = (message.text or "").split()
     if len(parts) < 2:
         await message.answer(
-            "Usage: <code>/untrackwallet &lt;address&gt; [chain]</code>",
+            t("wallet_usage_untrack", lang),
             parse_mode="HTML",
-            reply_markup=back_only(),
+            reply_markup=back_only(lang=lang),
         )
         return
 
@@ -199,26 +174,25 @@ async def untrackwallet_handler(message: Message, db: Database) -> None:
 
     await db.remove_tracked_wallet(message.from_user.id, address, chain=chain)
     await message.answer(
-        f"🗑 Removed <code>{_short(address)}</code> from your tracked wallets.",
+        t("wallet_removed", lang, address=_short(address)),
         parse_mode="HTML",
-        reply_markup=back_only(),
+        reply_markup=back_only(lang=lang),
     )
 
 
-# ---------------------------------------------------------------------------
-# /checkwallet <address> [chain]
-# ---------------------------------------------------------------------------
 @router.message(Command("checkwallet"))
 async def checkwallet_handler(
     message: Message,
+    db: Database,
     settings: Settings,
 ) -> None:
+    lang = await _get_lang(message.from_user.id, db)
     parts = (message.text or "").split()
     if len(parts) < 2:
         await message.answer(
-            "Usage: <code>/checkwallet &lt;address&gt; [chain]</code>",
+            t("wallet_usage_check", lang),
             parse_mode="HTML",
-            reply_markup=back_only(),
+            reply_markup=back_only(lang=lang),
         )
         return
 
@@ -228,8 +202,8 @@ async def checkwallet_handler(
     validation = validate_address(address)
     if not validation.is_valid:
         await message.answer(
-            f"❌ Invalid address. {validation.reason}",
-            reply_markup=back_only(),
+            t("scan_invalid_address", lang, reason=validation.reason),
+            reply_markup=back_only(lang=lang),
         )
         return
 
@@ -241,33 +215,31 @@ async def checkwallet_handler(
     )
 
     await message.answer(
-        "⏳ Fetching recent transactions…",
-        reply_markup=back_only(),
+        t("wallet_check_fetching", lang),
+        reply_markup=back_only(lang=lang),
     )
 
     txs = await provider.get_recent_transactions(address, chain=chain, limit=5)
 
     if not txs:
         await message.answer(
-            f"⚠️ No recent transactions found for <code>{_short(address)}</code>\n"
-            f"Chain: <b>{chain.capitalize()}</b>\n\n"
-            "Either the wallet has no activity, or the data provider is temporarily unavailable.",
+            t("wallet_check_no_data", lang, address=_short(address), chain=chain.capitalize()),
             parse_mode="HTML",
-            reply_markup=back_only(),
+            reply_markup=back_only(lang=lang),
         )
         return
 
-    lines = [f"👛 <b>Wallet activity</b> — <code>{_short(address)}</code>"]
-    lines.append(f"⛓ Chain: <b>{chain.capitalize()}</b>\n")
+    lines = [t("wallet_check_header", lang, address=_short(address))]
+    lines.append(t("wallet_check_chain", lang, chain=chain.capitalize()))
 
     for i, tx in enumerate(txs, start=1):
         direction = ""
         if tx.get("from", "").lower() == address.lower():
-            direction = "📤 Out"
+            direction = "📤"
         elif tx.get("to", "").lower() == address.lower():
-            direction = "📥 In"
+            direction = "📥"
         else:
-            direction = "🔄 Tx"
+            direction = "🔄"
 
         method = tx.get("method") or "transfer"
         if len(method) > 40:
@@ -276,35 +248,29 @@ async def checkwallet_handler(
         when = _format_ts(tx.get("timestamp"))
         is_error = tx.get("is_error")
 
-        line = f"{i}. {direction} — <b>{escape(method)}</b>"
+        line = f"{i}. {direction} <b>{escape(method)}</b>"
         if value:
-            line += f"\n   Amount: {value:.4f} native"
+            line += f"\n   {value:.4f}"
         line += f"\n   {when}"
         if is_error:
-            line += "  ❌ failed"
+            line += "  ❌"
         lines.append(line)
 
-    lines.append("\n<i>Data source: Etherscan / Helius</i>")
+    lines.append(t("wallet_check_source", lang))
 
     await message.answer(
         "\n".join(lines),
         parse_mode="HTML",
-        reply_markup=back_only(),
+        reply_markup=back_only(lang=lang),
     )
 
 
-# ---------------------------------------------------------------------------
-# Callback: menu "Analyze Wallet"
-# ---------------------------------------------------------------------------
 @router.callback_query(lambda callback: callback.data == "m:wallet")
-async def wallet_menu_callback(callback: CallbackQuery) -> None:
+async def wallet_menu_callback(callback: CallbackQuery, db: Database) -> None:
+    lang = await _get_lang(callback.from_user.id, db)
     await callback.message.edit_text(
-        "👛 <b>Wallet tools</b>\n\n"
-        "• <code>/trackwallet &lt;address&gt;</code> — track a wallet\n"
-        "• <code>/mywallets</code> — see your tracked wallets\n"
-        "• <code>/checkwallet &lt;address&gt;</code> — view recent activity\n"
-        "• <code>/untrackwallet &lt;address&gt;</code> — remove a wallet",
+        t("wallet_menu", lang),
         parse_mode="HTML",
-        reply_markup=wallets_keyboard(),
+        reply_markup=wallets_keyboard(lang=lang),
     )
     await callback.answer()

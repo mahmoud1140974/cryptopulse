@@ -1,4 +1,4 @@
-"""Token scan handlers."""
+"""Token scan handlers (multilingual)."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from analysis.token_analyzer import TokenAnalyzer
 from bot.keyboards import back_only, result_actions
 from config import Settings, get_plan_limits
 from database.models import Database
+from locales import DEFAULT_LANG, is_supported, t
 from providers.base import ProviderError
 from utils.formatters import format_token_report
 from utils.validators import validate_address
@@ -27,17 +28,21 @@ def _is_admin(user_id: int, settings: Settings) -> bool:
     return bool(settings.admin_telegram_id and user_id == settings.admin_telegram_id)
 
 
+async def _get_lang(telegram_id: int, db: Database) -> str:
+    lang = await db.get_user_language(telegram_id)
+    if lang and is_supported(lang):
+        return lang
+    return DEFAULT_LANG
+
+
 async def _check_scan_limit(
     user_id: int,
     plan: str,
     db: Database,
     settings: Settings,
+    lang: str,
 ) -> tuple[bool, str | None]:
-    """
-    Vérifie si l'utilisateur peut encore scanner.
-    Retourne (peut_scanner, message_d_erreur_si_bloque).
-    """
-    # Bypass admin
+    """Vérifie si l'utilisateur peut encore scanner (selon son plan)."""
     if _is_admin(user_id, settings):
         return True, None
 
@@ -45,32 +50,27 @@ async def _check_scan_limit(
     monthly_limit = limits.get("scans_per_month")
     daily_limit = limits.get("scans_per_day")
 
-    # Premium : illimité
     if monthly_limit is None and daily_limit is None:
         return True, None
 
-    # Free : limite mensuelle
     if monthly_limit is not None:
         used = await db.count_scans_this_month(user_id)
         if used >= monthly_limit:
-            return False, (
-                f"⚠️ <b>You've reached your monthly limit</b>\n\n"
-                f"You've used <b>{used}/{monthly_limit}</b> free scans this month.\n\n"
-                "Upgrade to keep scanning:\n"
-                "⭐ <b>Pro</b> — 50 scans/day for ~$5/month\n"
-                "👑 <b>Premium</b> — Unlimited scans for ~$15/month\n\n"
-                "Use /subscribe to see all plans."
+            return False, t(
+                "scan_limit_free_reached",
+                lang,
+                used=used,
+                limit=monthly_limit,
             )
 
-    # Pro : limite journalière
     if daily_limit is not None:
         used_today = await db.count_scans_today(user_id)
         if used_today >= daily_limit:
-            return False, (
-                f"⚠️ <b>Daily limit reached</b>\n\n"
-                f"You've used <b>{used_today}/{daily_limit}</b> scans today.\n\n"
-                "Come back tomorrow, or upgrade to Premium for unlimited scans.\n\n"
-                "Use /subscribe to see all plans."
+            return False, t(
+                "scan_limit_daily_reached",
+                lang,
+                used=used_today,
+                limit=daily_limit,
             )
 
     return True, None
@@ -85,25 +85,26 @@ async def perform_scan(
     settings: Settings,
     edit: bool = False,
 ) -> None:
+    lang = await _get_lang(user_id, db)
+
     validation = validate_address(address)
     if not validation.is_valid:
-        text = f"❌ Invalid address. {validation.reason}"
+        text = t("scan_invalid_address", lang, reason=validation.reason)
         if edit:
-            await message.edit_text(text, reply_markup=back_only())
+            await message.edit_text(text, reply_markup=back_only(lang=lang))
         else:
-            await message.answer(text, reply_markup=back_only())
+            await message.answer(text, reply_markup=back_only(lang=lang))
         return
 
     user = await db.get_or_create_user(user_id)
     plan = str((user or {}).get("plan") or "free").lower()
 
-    # Vérifie la limite selon le plan
-    allowed, error_message = await _check_scan_limit(user_id, plan, db, settings)
+    allowed, error_message = await _check_scan_limit(user_id, plan, db, settings, lang)
     if not allowed:
         if edit:
-            await message.edit_text(error_message, parse_mode="HTML", reply_markup=back_only())
+            await message.edit_text(error_message, parse_mode="HTML", reply_markup=back_only(lang=lang))
         else:
-            await message.answer(error_message, parse_mode="HTML", reply_markup=back_only())
+            await message.answer(error_message, parse_mode="HTML", reply_markup=back_only(lang=lang))
         return
 
     try:
@@ -114,39 +115,37 @@ async def perform_scan(
             address,
             analysis.get("risk", {}).get("score"),
         )
-        tracked = await _is_tracked(
-            db, user_id, analysis.get("chain") or validation.chain or "unknown", address
-        )
-        text = format_token_report(analysis)
-        keyboard = result_actions(
-            analysis.get("chain") or validation.chain or "unknown", address, tracked=tracked
-        )
+        chain = analysis.get("chain") or validation.chain or "unknown"
+        tracked = await _is_tracked(db, user_id, chain, address)
+        text = format_token_report(analysis, lang=lang)
+        keyboard = result_actions(chain, address, tracked=tracked, lang=lang)
         if edit:
             await message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
         else:
             await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
     except ProviderError:
-        text = "⚠️ Some market data is temporarily unavailable. Please try again."
+        text = t("scan_unavailable", lang)
         if edit:
-            await message.edit_text(text, reply_markup=back_only())
+            await message.edit_text(text, reply_markup=back_only(lang=lang))
         else:
-            await message.answer(text, reply_markup=back_only())
+            await message.answer(text, reply_markup=back_only(lang=lang))
     except Exception as exc:
         await db.log_error(f"Scan failed for {address}: {exc}")
-        text = "⚠️ Some market data is temporarily unavailable. Please try again."
+        text = t("scan_unavailable", lang)
         if edit:
-            await message.edit_text(text, reply_markup=back_only())
+            await message.edit_text(text, reply_markup=back_only(lang=lang))
         else:
-            await message.answer(text, reply_markup=back_only())
+            await message.answer(text, reply_markup=back_only(lang=lang))
 
 
 @router.callback_query(lambda callback: callback.data == "m:scan")
-async def scan_menu(callback: CallbackQuery, state: FSMContext) -> None:
+async def scan_menu(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
+    lang = await _get_lang(callback.from_user.id, db)
     await state.set_state(ScanStates.waiting_for_contract)
     await callback.message.edit_text(
-        "🔍 Send me the token contract address you want to scan.\n\n"
-        "Examples: an EVM address starting with 0x, or a Solana base58 address.",
-        reply_markup=back_only(),
+        t("scan_prompt", lang),
+        parse_mode="HTML",
+        reply_markup=back_only(lang=lang),
     )
     await callback.answer()
 
@@ -161,10 +160,12 @@ async def scan_command(
 ) -> None:
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2:
+        lang = await _get_lang(message.from_user.id, db)
         await state.set_state(ScanStates.waiting_for_contract)
         await message.answer(
-            "🔍 Send me the token contract address you want to scan.",
-            reply_markup=back_only(),
+            t("scan_prompt", lang),
+            parse_mode="HTML",
+            reply_markup=back_only(lang=lang),
         )
         return
     await state.clear()

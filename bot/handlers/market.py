@@ -66,18 +66,40 @@ async def market_handler(
     user_id = event.from_user.id
     lang = await _get_lang(user_id, db)
 
+    market_cap = None
+    btc_dominance = None
+
+    # Essai 1 : /global
     try:
         data = await coingecko.get_global_market()
-        market_cap = ((data.get("total_market_cap") or {}).get("usd"))
+        market_cap = (data.get("total_market_cap") or {}).get("usd")
         btc_dominance = (data.get("market_cap_percentage") or {}).get("btc")
+    except Exception:
+        data = None
+
+    # Essai 2 (fallback) : on calcule depuis /coins/markets
+    if market_cap is None:
+        try:
+            coins = await coingecko.get_top_coins(limit=10)
+            if coins:
+                market_cap = sum(
+                    (c.get("market_cap") or 0) for c in coins if isinstance(c.get("market_cap"), (int, float))
+                )
+                btc = next((c for c in coins if (c.get("symbol") or "").lower() == "btc"), None)
+                if btc and btc.get("market_cap") and market_cap:
+                    btc_dominance = (btc["market_cap"] / market_cap) * 100
+        except Exception:
+            pass
+
+    if market_cap is None and btc_dominance is None:
+        text = t("scan_unavailable", lang)
+    else:
         text = (
             t("market_header", lang)
             + t("market_total_cap", lang, value=_money(market_cap))
             + "\n"
             + t("market_btc_dominance", lang, value=_percent(btc_dominance))
         )
-    except Exception:
-        text = t("scan_unavailable", lang)
 
     if isinstance(event, CallbackQuery):
         await message.edit_text(text, parse_mode="HTML", reply_markup=back_only(lang=lang))

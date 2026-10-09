@@ -70,7 +70,7 @@ async def start_handler(
     await message.answer(
         t("welcome", lang),
         parse_mode="HTML",
-        reply_markup=main_menu(),
+        reply_markup=main_menu(lang=lang),
     )
 
 
@@ -87,7 +87,7 @@ async def set_initial_language(callback: CallbackQuery, db: Database) -> None:
     await callback.message.edit_text(
         t("language_set", code) + "\n\n" + t("welcome", code),
         parse_mode="HTML",
-        reply_markup=main_menu(),
+        reply_markup=main_menu(lang=code),
     )
     await callback.answer()
 
@@ -105,7 +105,7 @@ async def change_language(callback: CallbackQuery, db: Database) -> None:
     await callback.message.edit_text(
         t("language_set", code),
         parse_mode="HTML",
-        reply_markup=back_only(),
+        reply_markup=back_only(lang=code),
     )
     await callback.answer()
 
@@ -125,7 +125,7 @@ async def back_to_menu(callback: CallbackQuery, db: Database) -> None:
     await callback.message.edit_text(
         t("menu_short", lang),
         parse_mode="HTML",
-        reply_markup=main_menu(),
+        reply_markup=main_menu(lang=lang),
     )
     await callback.answer()
 
@@ -144,6 +144,6 @@ async def phase_placeholder(callback: CallbackQuery, db: Database) -> None:
     await callback.message.edit_text(
         t("feature_coming_soon", lang),
         parse_mode="HTML",
-        reply_markup=back_only(),
+        reply_markup=back_only(lang=lang),
     )
     await callback.answer()

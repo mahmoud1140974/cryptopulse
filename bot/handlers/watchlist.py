@@ -1,4 +1,4 @@
-"""Watchlist handlers."""
+"""Watchlist handlers (multilingual)."""
 
 from __future__ import annotations
 
@@ -7,143 +7,219 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
 from analysis.token_analyzer import TokenAnalyzer
-from bot.handlers.scan import perform_scan
 from bot.keyboards import back_only, watchlist_keyboard
-from config import Settings
+from config import Settings, get_plan_limits
 from database.models import Database
-from providers.base import ProviderError
+from locales import DEFAULT_LANG, is_supported, t
 from utils.validators import validate_address
 
 router = Router(name="watchlist")
-PAGE_SIZE = 5
 
 
-async def track_address(
-    message: Message,
-    user_id: int,
-    address: str,
-    db: Database,
-    analyzer: TokenAnalyzer,
-    settings: Settings,
-    chain_hint: str | None = None,
-    edit: bool = False,
-) -> None:
-    validation = validate_address(address)
-    if not validation.is_valid:
-        text = f"❌ Invalid address. {validation.reason}"
-    else:
-        await db.get_or_create_user(user_id)
-        count = await db.count_watchlist(user_id)
-        if count >= settings.free_watchlist_limit:
-            text = (
-                f"⚠️ Free watchlist limit reached ({settings.free_watchlist_limit} tokens).\n\n"
-                "Upgrade options will be available in Phase 3."
-            )
-        else:
-            snapshot = {}
-            try:
-                snapshot = await analyzer.get_market_snapshot(address, chain_hint)
-            except (ProviderError, Exception):
-                snapshot = {}
-            chain = chain_hint or snapshot.get("chain") or validation.chain or "unknown"
-            await db.add_watchlist(
-                user_id,
-                chain,
-                address,
-                symbol=snapshot.get("symbol"),
-                name=snapshot.get("name"),
-            )
-            label = snapshot.get("symbol") or snapshot.get("name") or "token"
-            text = f"✅ Added {label} to your watchlist."
+def _is_admin(user_id: int, settings: Settings) -> bool:
+    return bool(settings.admin_telegram_id and user_id == settings.admin_telegram_id)
 
-    if edit:
-        await message.edit_text(text, reply_markup=back_only())
-    else:
-        await message.answer(text, reply_markup=back_only())
+
+async def _get_lang(telegram_id: int, db: Database) -> str:
+    lang = await db.get_user_language(telegram_id)
+    if lang and is_supported(lang):
+        return lang
+    return DEFAULT_LANG
 
 
 @router.message(Command("track"))
-async def track_command(
+async def track_handler(
     message: Message,
     db: Database,
     analyzer: TokenAnalyzer,
     settings: Settings,
 ) -> None:
-    parts = (message.text or "").split(maxsplit=1)
+    lang = await _get_lang(message.from_user.id, db)
+    parts = (message.text or "").split()
     if len(parts) < 2:
-        await message.answer("Usage: /track <contract>", reply_markup=back_only())
+        await message.answer(
+            "Usage: <code>/track &lt;contract&gt;</code>",
+            parse_mode="HTML",
+            reply_markup=back_only(lang=lang),
+        )
         return
-    await track_address(message, message.from_user.id, parts[1].strip(), db, analyzer, settings)
 
+    address = parts[1].strip()
+    validation = validate_address(address)
+    if not validation.is_valid:
+        await message.answer(
+            t("scan_invalid_address", lang, reason=validation.reason),
+            reply_markup=back_only(lang=lang),
+        )
+        return
 
-@router.callback_query(lambda callback: callback.data and callback.data.startswith("t:"))
-async def track_callback(
-    callback: CallbackQuery,
-    db: Database,
-    analyzer: TokenAnalyzer,
-    settings: Settings,
-) -> None:
-    _, chain, address = callback.data.split(":", 2)
-    await track_address(callback.message, callback.from_user.id, address, db, analyzer, settings, chain_hint=chain, edit=True)
-    await callback.answer()
+    user = await db.get_or_create_user(message.from_user.id)
+    plan = str((user or {}).get("plan") or "free").lower()
+    limits = get_plan_limits(plan)
+    limit = limits.get("watchlist_max", 5)
+    if _is_admin(message.from_user.id, settings):
+        limit = 999
+
+    count = await db.count_watchlist(message.from_user.id)
+    if count >= limit:
+        await message.answer(
+            t("watchlist_limit_reached", lang, count=count, limit=limit),
+            parse_mode="HTML",
+            reply_markup=back_only(lang=lang),
+        )
+        return
+
+    chain = validation.chain or "ethereum"
+    symbol = None
+    name = None
+    try:
+        analysis = await analyzer.analyze(address)
+        chain = analysis.get("chain") or chain
+        symbol = analysis.get("symbol")
+        name = analysis.get("name")
+    except Exception:
+        pass
+
+    await db.add_watchlist(
+        message.from_user.id, chain, address, symbol=symbol, name=name
+    )
+
+    await message.answer(
+        t("watchlist_added", lang, symbol=symbol or address[:8]),
+        parse_mode="HTML",
+        reply_markup=back_only(lang=lang),
+    )
 
 
 @router.message(Command("watchlist"))
-async def watchlist_command(message: Message, db: Database) -> None:
-    await _send_watchlist(message, message.from_user.id, db, page=0, edit=False)
+async def watchlist_handler(message: Message, db: Database) -> None:
+    lang = await _get_lang(message.from_user.id, db)
+    items = await db.list_watchlist(message.from_user.id, limit=100)
+    if not items:
+        await message.answer(
+            t("watchlist_empty", lang),
+            parse_mode="HTML",
+            reply_markup=back_only(lang=lang),
+        )
+        return
+
+    lines = [t("watchlist_header", lang, count=len(items))]
+    for item in items:
+        label = item.get("symbol") or item.get("name") or item.get("contract_address", "")[:8]
+        chain = (item.get("chain") or "unknown").capitalize()
+        lines.append(f"• <b>{label}</b> — {chain}")
+
+    await message.answer(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=watchlist_keyboard(items, lang=lang),
+    )
+
+
+@router.callback_query(lambda callback: callback.data and callback.data.startswith("t:"))
+async def quick_track(callback: CallbackQuery, db: Database, settings: Settings) -> None:
+    lang = await _get_lang(callback.from_user.id, db)
+    parts = callback.data.split(":", 2)
+    if len(parts) < 3:
+        await callback.answer()
+        return
+    chain, address = parts[1], parts[2]
+
+    user = await db.get_or_create_user(callback.from_user.id)
+    plan = str((user or {}).get("plan") or "free").lower()
+    limits = get_plan_limits(plan)
+    limit = limits.get("watchlist_max", 5)
+    if _is_admin(callback.from_user.id, settings):
+        limit = 999
+
+    count = await db.count_watchlist(callback.from_user.id)
+    if count >= limit:
+        await callback.answer(
+            t("watchlist_limit_reached", lang, count=count, limit=limit),
+            show_alert=True,
+        )
+        return
+
+    await db.add_watchlist(callback.from_user.id, chain, address)
+    await callback.answer(t("watchlist_added", lang, symbol=address[:8]), show_alert=False)
+
+
+@router.callback_query(lambda callback: callback.data and callback.data.startswith("wr:"))
+async def remove_from_watchlist(callback: CallbackQuery, db: Database) -> None:
+    lang = await _get_lang(callback.from_user.id, db)
+    _, item_id = callback.data.split(":", 1)
+    await db.remove_watchlist(callback.from_user.id, item_id)
+
+    items = await db.list_watchlist(callback.from_user.id, limit=100)
+    if not items:
+        await callback.message.edit_text(
+            t("watchlist_removed", lang) + "\n\n" + t("watchlist_empty", lang),
+            parse_mode="HTML",
+            reply_markup=back_only(lang=lang),
+        )
+    else:
+        lines = [t("watchlist_removed", lang), "", t("watchlist_header", lang, count=len(items))]
+        for item in items:
+            label = item.get("symbol") or item.get("name") or item.get("contract_address", "")[:8]
+            chain = (item.get("chain") or "unknown").capitalize()
+            lines.append(f"• <b>{label}</b> — {chain}")
+        await callback.message.edit_text(
+            "\n".join(lines),
+            parse_mode="HTML",
+            reply_markup=watchlist_keyboard(items, lang=lang),
+        )
+    await callback.answer()
 
 
 @router.callback_query(lambda callback: callback.data == "m:watchlist")
 async def watchlist_menu(callback: CallbackQuery, db: Database) -> None:
-    await _send_watchlist(callback.message, callback.from_user.id, db, page=0, edit=True)
+    lang = await _get_lang(callback.from_user.id, db)
+    items = await db.list_watchlist(callback.from_user.id, limit=100)
+    if not items:
+        await callback.message.edit_text(
+            t("watchlist_empty", lang),
+            parse_mode="HTML",
+            reply_markup=back_only(lang=lang),
+        )
+    else:
+        lines = [t("watchlist_header", lang, count=len(items))]
+        for item in items:
+            label = item.get("symbol") or item.get("name") or item.get("contract_address", "")[:8]
+            chain = (item.get("chain") or "unknown").capitalize()
+            lines.append(f"• <b>{label}</b> — {chain}")
+        await callback.message.edit_text(
+            "\n".join(lines),
+            parse_mode="HTML",
+            reply_markup=watchlist_keyboard(items, lang=lang),
+        )
     await callback.answer()
-
-
-@router.callback_query(lambda callback: callback.data and callback.data.startswith("wl:"))
-async def watchlist_page(callback: CallbackQuery, db: Database) -> None:
-    page = int(callback.data.split(":", 1)[1])
-    await _send_watchlist(callback.message, callback.from_user.id, db, page=page, edit=True)
-    await callback.answer()
-
-
-@router.callback_query(lambda callback: callback.data and callback.data.startswith("wr:"))
-async def watchlist_remove(callback: CallbackQuery, db: Database) -> None:
-    item_id = callback.data.split(":", 1)[1]
-    await db.remove_watchlist(callback.from_user.id, item_id)
-    await _send_watchlist(callback.message, callback.from_user.id, db, page=0, edit=True)
-    await callback.answer("Removed")
 
 
 @router.callback_query(lambda callback: callback.data and callback.data.startswith("ws:"))
-async def watchlist_scan(
-    callback: CallbackQuery,
-    db: Database,
-    analyzer: TokenAnalyzer,
-    settings: Settings,
-) -> None:
-    item_id = callback.data.split(":", 1)[1]
+async def show_watchlist_item(callback: CallbackQuery, db: Database) -> None:
+    from analysis.token_analyzer import TokenAnalyzer
+    from utils.formatters import format_token_report
+    from bot.keyboards import result_actions
+
+    _, item_id = callback.data.split(":", 1)
     item = await db.get_watchlist_item(item_id)
-    if not item or item.get("telegram_id") != callback.from_user.id:
-        await callback.answer("Watchlist item not found", show_alert=True)
+    if not item:
+        await callback.answer("Not found", show_alert=True)
         return
-    await perform_scan(callback.message, callback.from_user.id, item["contract_address"], db, analyzer, settings, edit=True)
+
+    lang = await _get_lang(callback.from_user.id, db)
+
+    try:
+        from config import Settings
+        from database.models import Database as DB
+        # Fallback: scan directly
+        analyzer = TokenAnalyzer(
+            Settings.from_env(),
+        )
+        analysis = await analyzer.analyze(item["contract_address"])
+        text = format_token_report(analysis, lang=lang)
+        keyboard = result_actions(item.get("chain", "ethereum"), item["contract_address"], tracked=True, lang=lang)
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+    except Exception:
+        await callback.answer(t("error_generic", lang), show_alert=True)
     await callback.answer()
-
-
-async def _send_watchlist(message: Message, telegram_id: int, db: Database, page: int, edit: bool) -> None:
-    await db.get_or_create_user(telegram_id)
-    total = await db.count_watchlist(telegram_id)
-    items = await db.list_watchlist(telegram_id, limit=PAGE_SIZE, offset=page * PAGE_SIZE)
-    if not items:
-        text = "⭐ Your watchlist is empty.\n\nUse /track <contract> or scan a token and press Track."
-    else:
-        lines = [f"⭐ <b>Your Watchlist</b> — {total} token(s)", ""]
-        for item in items:
-            label = item.get("symbol") or item.get("name") or "Unknown token"
-            lines.append(f"• <b>{label}</b> — {item.get('chain', 'unknown')}")
-        text = "\n".join(lines)
-    keyboard = watchlist_keyboard(items, page=page, page_size=PAGE_SIZE, total=total)
-    if edit:
-        await message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
-    else:
-        await message.answer(text, parse_mode="HTML", reply_markup=keyboard)

@@ -135,12 +135,10 @@ def format_token_report(analysis: dict[str, Any], lang: str = "en") -> str:
     )
     lines.append(t("report_holders", lang, value=_format_int(holders)))
 
-    # --- NOUVEAU : Total Supply ---
     supply = _get(analysis, "total_supply")
     if supply is not None:
         lines.append(t("report_supply", lang, value=_format_int(supply)))
 
-    # --- NOUVEAU : Decimals ---
     decimals = _get(analysis, "decimals")
     if decimals is not None:
         lines.append(t("report_decimals", lang, value=_format_int(decimals)))
@@ -190,7 +188,7 @@ def format_token_report(analysis: dict[str, Any], lang: str = "en") -> str:
         elif freeze_auth is False:
             lines.append(t("report_freeze_disabled", lang))
 
-    # --- NOUVEAU : Liens ---
+    # --- Liens (emoji déjà dans les traductions, pas de doublon) ---
     website = _get(analysis, "website_url")
     twitter = _get(analysis, "twitter_url")
     telegram = _get(analysis, "telegram_url")
@@ -198,13 +196,17 @@ def format_token_report(analysis: dict[str, Any], lang: str = "en") -> str:
 
     links_lines = []
     if website:
-        links_lines.append(f'🌐 <a href="{escape(website)}">{_escape_link_label(t("report_link_website", lang))}</a>')
+        label = t("report_link_website", lang)
+        links_lines.append(f'<a href="{escape(website)}">{_escape_link_label(label)}</a>')
     if twitter:
-        links_lines.append(f'🐦 <a href="{escape(twitter)}">{_escape_link_label(t("report_link_twitter", lang))}</a>')
+        label = t("report_link_twitter", lang)
+        links_lines.append(f'<a href="{escape(twitter)}">{_escape_link_label(label)}</a>')
     if telegram:
-        links_lines.append(f'📢 <a href="{escape(telegram)}">{_escape_link_label(t("report_link_telegram", lang))}</a>')
+        label = t("report_link_telegram", lang)
+        links_lines.append(f'<a href="{escape(telegram)}">{_escape_link_label(label)}</a>')
     if dexscreener:
-        links_lines.append(f'📊 <a href="{escape(dexscreener)}">{_escape_link_label(t("report_link_dexscreener", lang))}</a>')
+        label = t("report_link_dexscreener", lang)
+        links_lines.append(f'<a href="{escape(dexscreener)}">{_escape_link_label(label)}</a>')
 
     if links_lines:
         lines.append("")

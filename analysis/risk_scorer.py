@@ -14,7 +14,7 @@ class RiskResult:
     score: int
     band: str
     emoji: str
-    reasons: list[str] = field(default_factory=list)
+    reasons: list[Any] = field(default_factory=list)
 
     @property
     def status(self) -> str:
@@ -123,71 +123,75 @@ def score_token(data: dict[str, Any]) -> RiskResult:
             score=0,
             band=INSUFFICIENT_DATA,
             emoji="⚠️",
-            reasons=["Insufficient data to assess risk"],
+            reasons=[{"key": "reason_insufficient_data", "params": {}}],
         )
 
     score = 0
-    reasons: list[str] = []
+    reasons: list[dict[str, Any]] = []
     missing: list[str] = []
+
+    def _reason(key: str, **params: Any) -> None:
+        """Ajoute une raison sous forme structurée (clé de traduction + paramètres)."""
+        reasons.append({"key": key, "params": params})
 
     # --- Liquidité ---
     if liquidity is None:
         missing.append("liquidity")
     elif liquidity < 10_000:
         score += 18
-        reasons.append(f"Liquidity is very low ({_money(liquidity)})")
+        _reason("reason_liquidity_very_low", value=_money(liquidity))
     elif liquidity < 50_000:
         score += 10
-        reasons.append(f"Liquidity is low ({_money(liquidity)})")
+        _reason("reason_liquidity_low", value=_money(liquidity))
     elif liquidity < 250_000:
         score += 4
-        reasons.append(f"Liquidity is modest ({_money(liquidity)})")
+        _reason("reason_liquidity_modest", value=_money(liquidity))
 
     # --- Volume 24h ---
     if volume is None:
         missing.append("24h volume")
     elif volume < 1_000:
         score += 8
-        reasons.append(f"24h volume is very low ({_money(volume)})")
+        _reason("reason_volume_very_low", value=_money(volume))
     elif volume < 10_000:
         score += 4
-        reasons.append(f"24h volume is low ({_money(volume)})")
+        _reason("reason_volume_low", value=_money(volume))
 
     # --- Market cap ---
     if market_cap is None:
         missing.append("market cap")
     elif market_cap < 100_000:
         score += 8
-        reasons.append(f"Market cap is very small ({_money(market_cap)})")
+        _reason("reason_mcap_very_small", value=_money(market_cap))
     elif market_cap < 1_000_000:
         score += 4
-        reasons.append(f"Market cap is small ({_money(market_cap)})")
+        _reason("reason_mcap_small", value=_money(market_cap))
 
     # --- Âge du token ---
     if age_days is None:
         missing.append("token age")
     elif age_days < 1:
         score += 12
-        reasons.append("Token is less than 1 day old")
+        _reason("reason_age_less_than_day")
     elif age_days < 7:
         score += 8
-        reasons.append(f"Token created {max(int(age_days), 0)} day(s) ago")
+        _reason("reason_age_days", days=max(int(age_days), 0))
     elif age_days < 30:
         score += 4
-        reasons.append(f"Token is young ({int(age_days)} day(s) old)")
+        _reason("reason_age_young", days=int(age_days))
 
     # --- Concentration holders ---
     if top10 is None:
         missing.append("top 10 holder %")
     elif top10 > 80:
         score += 25
-        reasons.append(f"Top 10 holders control {top10:.2f}% of supply")
+        _reason("reason_top10_control", pct=f"{top10:.2f}")
     elif top10 > 50:
         score += 18
-        reasons.append(f"Top 10 holders control {top10:.2f}% of supply")
+        _reason("reason_top10_control", pct=f"{top10:.2f}")
     elif top10 > 30:
         score += 8
-        reasons.append(f"Top 10 holders control {top10:.2f}% of supply")
+        _reason("reason_top10_control", pct=f"{top10:.2f}")
 
     # --- Champs EVM uniquement (contrat, honeypot, proxy, etc.) ---
     if not is_solana:
@@ -195,37 +199,37 @@ def score_token(data: dict[str, Any]) -> RiskResult:
             missing.append("contract verification")
         elif verified is False:
             score += 10
-            reasons.append("Contract source is not verified")
+            _reason("reason_contract_unverified")
 
         if ownership_renounced is None:
             missing.append("ownership renouncement")
         elif ownership_renounced is False:
             score += 8
-            reasons.append("Contract ownership has not been renounced")
+            _reason("reason_ownership_not_renounced")
 
         if has_mint is None:
             missing.append("mint function")
         elif has_mint is True:
             score += 15
-            reasons.append("Mint function detected in contract")
+            _reason("reason_mint_function")
 
         if has_blacklist is None:
             missing.append("blacklist function")
         elif has_blacklist is True:
             score += 10
-            reasons.append("Blacklist function detected in contract")
+            _reason("reason_blacklist_function")
 
         if is_honeypot is None:
             missing.append("honeypot check")
         elif is_honeypot is True:
             score += 50
-            reasons.append("Honeypot detected")
+            _reason("reason_honeypot_detected")
 
         if is_proxy is None:
             missing.append("proxy/upgradeable check")
         elif is_proxy is True:
             score += 8
-            reasons.append("Proxy or upgradeable contract detected")
+            _reason("reason_proxy_contract")
 
     # --- Freeze authority (Solana uniquement) ---
     if is_solana:
@@ -233,7 +237,7 @@ def score_token(data: dict[str, Any]) -> RiskResult:
             missing.append("freeze authority")
         elif freeze_authority_active is True:
             score += 20
-            reasons.append("Solana freeze authority is active")
+            _reason("reason_freeze_authority")
 
     # --- Buy/sell tax (commun, souvent absent sur Solana) ---
     if buy_tax is None and sell_tax is None:
@@ -244,20 +248,26 @@ def score_token(data: dict[str, Any]) -> RiskResult:
         if sell_tax is None:
             missing.append("sell tax")
 
-        tax_bits: list[str] = []
-        if buy_tax is not None and buy_tax > 10:
-            tax_bits.append(f"buy tax {buy_tax:.2f}%")
-        if sell_tax is not None and sell_tax > 10:
-            tax_bits.append(f"sell tax {sell_tax:.2f}%")
+        high_buy = buy_tax is not None and buy_tax > 10
+        high_sell = sell_tax is not None and sell_tax > 10
 
-        if tax_bits:
+        if high_buy or high_sell:
             if (buy_tax is not None and buy_tax > 20) or (
                 sell_tax is not None and sell_tax > 20
             ):
                 score += 18
             else:
                 score += 12
-            reasons.append("High token tax detected (" + ", ".join(tax_bits) + ")")
+            if high_buy and high_sell:
+                _reason(
+                    "reason_high_tax_both",
+                    buy=f"{buy_tax:.2f}%",
+                    sell=f"{sell_tax:.2f}%",
+                )
+            elif high_buy:
+                _reason("reason_high_tax_buy", value=f"{buy_tax:.2f}%")
+            else:
+                _reason("reason_high_tax_sell", value=f"{sell_tax:.2f}%")
 
     # --- Data completeness guardrail ---
     market_known = any(
@@ -283,25 +293,25 @@ def score_token(data: dict[str, Any]) -> RiskResult:
 
     if categories_known == 1:
         score += 25
-        reasons.append("Only one data category is available; risk may be underestimated")
+        _reason("reason_one_category")
     elif categories_known == 2:
         if not security_known:
             score += 12
-            reasons.append("No security data available; risk may be underestimated")
+            _reason("reason_no_security_data")
         elif not holder_known:
             score += 5
-            reasons.append("No holder concentration data available")
+            _reason("reason_no_holder_data")
         elif not market_known:
             score += 5
-            reasons.append("No market data available")
+            _reason("reason_no_market_data")
 
     # --- Unknown factors ---
     if missing:
         missing_unique = list(dict.fromkeys(missing))
-        reasons.append("Unknown: " + ", ".join(missing_unique))
+        _reason("reason_unknown_fields", fields=", ".join(missing_unique))
 
     if score == 0:
-        reasons.insert(0, "No risk flags found in available data")
+        reasons.insert(0, {"key": "reason_no_risk_flags", "params": {}})
 
     score = max(0, min(score, 100))
     band, emoji = _band(score)

@@ -63,6 +63,25 @@ def _escape_link_label(text: str) -> str:
     return html.escape(str(text or ""), quote=False)
 
 
+def _format_reason(reason: Any, lang: str) -> str:
+    """Traduit une raison de risque.
+
+    Accepte deux formats pour rester compatible avec l'ancien code :
+    - nouveau : {"key": "reason_...", "params": {...}} -> traduit via t()
+    - ancien  : "texte libre" -> affiché tel quel (échappé)
+    """
+    from locales import t
+
+    if isinstance(reason, dict) and "key" in reason:
+        params = reason.get("params") or {}
+        try:
+            return t(str(reason["key"]), lang, **params)
+        except Exception:
+            # Jamais bloquant : en cas de souci, on affiche la clé brute.
+            return escape(str(reason["key"]))
+    return escape(str(reason))
+
+
 def format_token_report(analysis: dict[str, Any], lang: str = "en") -> str:
     """Formate le rapport d'analyse pour l'affichage Telegram en HTML."""
     from locales import t
@@ -98,7 +117,7 @@ def format_token_report(analysis: dict[str, Any], lang: str = "en") -> str:
     if reasons:
         lines.append(t("report_reasons", lang))
         for reason in reasons:
-            lines.append(f"• {escape(str(reason))}")
+            lines.append(f"• {_format_reason(reason, lang)}")
         lines.append("")
 
     # --- Données de marché ---
@@ -242,7 +261,7 @@ def format_alert_message(
     if reasons:
         lines.append(t("report_reasons", lang))
         for reason in reasons:
-            lines.append(f"• {escape(str(reason))}")
+            lines.append(f"• {_format_reason(reason, lang)}")
         lines.append("")
 
     lines.append(t("report_market_data", lang))

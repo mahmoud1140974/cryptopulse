@@ -239,35 +239,38 @@ def score_token(data: dict[str, Any]) -> RiskResult:
             score += 20
             _reason("reason_freeze_authority")
 
-    # --- Buy/sell tax (commun, souvent absent sur Solana) ---
-    if buy_tax is None and sell_tax is None:
-        missing.append("buy/sell tax")
-    else:
-        if buy_tax is None:
-            missing.append("buy tax")
-        if sell_tax is None:
-            missing.append("sell tax")
+    # --- Buy/sell tax ---
+    # Sur Solana, l'API SolanaTracker ne fournit pas cette donnée de manière
+    # fiable → on n'affiche PAS "Unknown: buy/sell tax" pour éviter du bruit.
+    if not is_solana:
+        if buy_tax is None and sell_tax is None:
+            missing.append("buy/sell tax")
+        else:
+            if buy_tax is None:
+                missing.append("buy tax")
+            if sell_tax is None:
+                missing.append("sell tax")
 
-        high_buy = buy_tax is not None and buy_tax > 10
-        high_sell = sell_tax is not None and sell_tax > 10
+            high_buy = buy_tax is not None and buy_tax > 10
+            high_sell = sell_tax is not None and sell_tax > 10
 
-        if high_buy or high_sell:
-            if (buy_tax is not None and buy_tax > 20) or (
-                sell_tax is not None and sell_tax > 20
-            ):
-                score += 18
-            else:
-                score += 12
-            if high_buy and high_sell:
-                _reason(
-                    "reason_high_tax_both",
-                    buy=f"{buy_tax:.2f}%",
-                    sell=f"{sell_tax:.2f}%",
-                )
-            elif high_buy:
-                _reason("reason_high_tax_buy", value=f"{buy_tax:.2f}%")
-            else:
-                _reason("reason_high_tax_sell", value=f"{sell_tax:.2f}%")
+            if high_buy or high_sell:
+                if (buy_tax is not None and buy_tax > 20) or (
+                    sell_tax is not None and sell_tax > 20
+                ):
+                    score += 18
+                else:
+                    score += 12
+                if high_buy and high_sell:
+                    _reason(
+                        "reason_high_tax_both",
+                        buy=f"{buy_tax:.2f}%",
+                        sell=f"{sell_tax:.2f}%",
+                    )
+                elif high_buy:
+                    _reason("reason_high_tax_buy", value=f"{buy_tax:.2f}%")
+                else:
+                    _reason("reason_high_tax_sell", value=f"{sell_tax:.2f}%")
 
     # --- Data completeness guardrail ---
     market_known = any(

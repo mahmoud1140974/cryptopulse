@@ -58,6 +58,11 @@ def _short_address(address: Any) -> str:
     return f"{address[:6]}…{address[-4:]}"
 
 
+def _escape_link_label(text: str) -> str:
+    """Échappe le texte pour l'affichage dans <a>...</a>."""
+    return html.escape(str(text or ""), quote=False)
+
+
 def format_token_report(analysis: dict[str, Any], lang: str = "en") -> str:
     """Formate le rapport d'analyse pour l'affichage Telegram en HTML."""
     from locales import t
@@ -88,6 +93,7 @@ def format_token_report(analysis: dict[str, Any], lang: str = "en") -> str:
     short_addr = _short_address(address)
     lines.append(f"<b>${symbol}</b> ({short_addr})\n")
 
+    # --- Raisons ---
     reasons = risk.get("reasons", []) or []
     if reasons:
         lines.append(t("report_reasons", lang))
@@ -95,6 +101,7 @@ def format_token_report(analysis: dict[str, Any], lang: str = "en") -> str:
             lines.append(f"• {escape(str(reason))}")
         lines.append("")
 
+    # --- Données de marché ---
     lines.append(t("report_market_data", lang))
 
     price = _get(analysis, "price_usd", "price")
@@ -128,10 +135,21 @@ def format_token_report(analysis: dict[str, Any], lang: str = "en") -> str:
     )
     lines.append(t("report_holders", lang, value=_format_int(holders)))
 
+    # --- NOUVEAU : Total Supply ---
+    supply = _get(analysis, "total_supply")
+    if supply is not None:
+        lines.append(t("report_supply", lang, value=_format_int(supply)))
+
+    # --- NOUVEAU : Decimals ---
+    decimals = _get(analysis, "decimals")
+    if decimals is not None:
+        lines.append(t("report_decimals", lang, value=_format_int(decimals)))
+
     chain_raw = analysis.get("chain", "unknown")
     chain = chain_raw.capitalize() if isinstance(chain_raw, str) else "Unknown"
     lines.append(t("report_chain", lang, value=chain))
 
+    # --- Indicateurs conditionnels ---
     is_honeypot = _get(analysis, "is_honeypot", "honeypot")
     if is_honeypot is not None:
         if is_honeypot:
@@ -171,6 +189,28 @@ def format_token_report(analysis: dict[str, Any], lang: str = "en") -> str:
             lines.append(t("report_freeze_active", lang))
         elif freeze_auth is False:
             lines.append(t("report_freeze_disabled", lang))
+
+    # --- NOUVEAU : Liens ---
+    website = _get(analysis, "website_url")
+    twitter = _get(analysis, "twitter_url")
+    telegram = _get(analysis, "telegram_url")
+    dexscreener = _get(analysis, "dexscreener_url")
+
+    links_lines = []
+    if website:
+        links_lines.append(f'🌐 <a href="{escape(website)}">{_escape_link_label(t("report_link_website", lang))}</a>')
+    if twitter:
+        links_lines.append(f'🐦 <a href="{escape(twitter)}">{_escape_link_label(t("report_link_twitter", lang))}</a>')
+    if telegram:
+        links_lines.append(f'📢 <a href="{escape(telegram)}">{_escape_link_label(t("report_link_telegram", lang))}</a>')
+    if dexscreener:
+        links_lines.append(f'📊 <a href="{escape(dexscreener)}">{_escape_link_label(t("report_link_dexscreener", lang))}</a>')
+
+    if links_lines:
+        lines.append("")
+        lines.append(t("report_links", lang))
+        for l in links_lines:
+            lines.append(l)
 
     lines.append(t("report_disclaimer", lang))
 

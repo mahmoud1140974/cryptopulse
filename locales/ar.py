@@ -73,6 +73,15 @@ STRINGS: dict[str, str] = {
         "\n⚠️ <i>الأصول الرقمية عالية الخطورة. قم دائماً بأبحاثك الخاصة قبل التداول.</i>"
     ),
 
+    # New: supply, decimals, links
+    "report_supply": "💰 <b>إجمالي العرض:</b> {value}",
+    "report_decimals": "🔢 <b>المنازل العشرية:</b> {value}",
+    "report_links": "🔗 <b>الروابط</b>",
+    "report_link_website": "🌐 الموقع",
+    "report_link_twitter": "🐦 تويتر",
+    "report_link_telegram": "📢 تيليجرام",
+    "report_link_dexscreener": "📊 DexScreener",
+
     # Wallet tracking
     "wallet_menu": (
         "👛 <b>أدوات المحفظة</b>\n\n"

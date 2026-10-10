@@ -32,11 +32,47 @@ class DexScreenerProvider(BaseProvider):
             logger.warning("dexscreener returned no pairs for address %s", address)
             raise ProviderError("DexScreener returned no pairs for this token")
 
-        primary = max(pairs, key=lambda pair: _float(pair.get("liquidity", {}).get("usd")) or 0)
+        primary = max(
+            pairs,
+            key=lambda pair: _float(pair.get("liquidity", {}).get("usd")) or 0,
+        )
         base_token = primary.get("baseToken") or {}
         quote_token = primary.get("quoteToken") or {}
-        token = base_token if str(base_token.get("address", "")).lower() == address.lower() else base_token
+        token = (
+            base_token
+            if str(base_token.get("address", "")).lower() == address.lower()
+            else quote_token
+        )
         txns = primary.get("txns", {}).get("h24", {}) or {}
+        info = primary.get("info") or {}
+
+        # --- Extraire l'image ---
+        image_url = info.get("imageUrl")
+
+        # --- Extraire les liens (website, twitter, telegram) ---
+        website_url = None
+        twitter_url = None
+        telegram_url = None
+        for site in info.get("websites") or []:
+            url = site.get("url")
+            if url and not website_url:
+                website_url = url
+        for social in info.get("socials") or []:
+            stype = (social.get("type") or "").lower()
+            url = social.get("url")
+            if not url:
+                continue
+            if stype == "twitter" and not twitter_url:
+                twitter_url = url
+            elif stype == "telegram" and not telegram_url:
+                telegram_url = url
+
+        # --- URL DexScreener officielle ---
+        dexscreener_url = primary.get("url")
+
+        # --- Total supply / Decimals (si dispo) ---
+        total_supply = _float(info.get("totalSupply"))
+        decimals = _int(info.get("decimals"))
 
         snapshot = {
             "provider": self.name,
@@ -46,14 +82,26 @@ class DexScreenerProvider(BaseProvider):
             "name": token.get("name"),
             "symbol": token.get("symbol"),
             "price_usd": _float(primary.get("priceUsd")),
-            "liquidity_usd": sum(_float((pair.get("liquidity") or {}).get("usd")) or 0 for pair in pairs),
-            "volume_24h_usd": sum(_float((pair.get("volume") or {}).get("h24")) or 0 for pair in pairs),
+            "liquidity_usd": sum(
+                _float((pair.get("liquidity") or {}).get("usd")) or 0 for pair in pairs
+            ),
+            "volume_24h_usd": sum(
+                _float((pair.get("volume") or {}).get("h24")) or 0 for pair in pairs
+            ),
             "market_cap_usd": _float(primary.get("marketCap")) or _float(primary.get("fdv")),
             "pair_created_at": primary.get("pairCreatedAt"),
             "buys_24h": _int(txns.get("buys")),
             "sells_24h": _int(txns.get("sells")),
             "quote_symbol": quote_token.get("symbol"),
             "pairs_count": len(pairs),
+            # --- Nouveaux champs ---
+            "image_url": image_url,
+            "website_url": website_url,
+            "twitter_url": twitter_url,
+            "telegram_url": telegram_url,
+            "dexscreener_url": dexscreener_url,
+            "total_supply": total_supply,
+            "decimals": decimals,
         }
         self._cache[cache_key] = snapshot
         return snapshot

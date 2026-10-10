@@ -1,6 +1,8 @@
-"""Token scan handlers (multilingual)."""
+"""Token scan handlers (multilingual, with token image)."""
 
 from __future__ import annotations
+
+import logging
 
 from aiogram import Router
 from aiogram.filters import Command, StateFilter
@@ -17,7 +19,11 @@ from providers.base import ProviderError
 from utils.formatters import format_token_report
 from utils.validators import validate_address
 
+logger = logging.getLogger(__name__)
 router = Router(name="scan")
+
+# Telegram caption limit for photos is 1024 chars
+CAPTION_LIMIT = 1024
 
 
 class ScanStates(StatesGroup):
@@ -76,6 +82,59 @@ async def _check_scan_limit(
     return True, None
 
 
+async def _send_report(
+    message: Message,
+    text: str,
+    image_url: str | None,
+    keyboard,
+    edit: bool = False,
+) -> None:
+    """
+    Envoie le rapport. Si une image est disponible, l'envoie en photo avec
+    caption (ou photo + texte si le rapport est trop long pour un caption).
+    Si edit=True (depuis Refresh), on supprime l'ancien message et on envoie
+    un nouveau, car on ne peut pas éditer un message texte en photo.
+    """
+    # Si on doit "éditer" mais qu'on a une image, on supprime et on renvoie
+    if edit:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        try:
+            await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+        except Exception:
+            pass
+        return
+
+    # Cas 1 : pas d'image → envoi texte classique
+    if not image_url:
+        await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+        return
+
+    # Cas 2 : rapport court → photo avec caption
+    if len(text) <= CAPTION_LIMIT:
+        try:
+            await message.answer_photo(
+                photo=image_url,
+                caption=text,
+                parse_mode="HTML",
+                reply_markup=keyboard,
+            )
+            return
+        except Exception as exc:
+            logger.warning("answer_photo with caption failed: %s", exc)
+            # Fallback : photo simple + texte
+
+    # Cas 3 : rapport long → photo séparée + texte avec boutons
+    try:
+        await message.answer_photo(photo=image_url)
+    except Exception as exc:
+        logger.warning("answer_photo (image only) failed: %s", exc)
+
+    await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+
+
 async def perform_scan(
     message: Message,
     user_id: int,
@@ -91,9 +150,12 @@ async def perform_scan(
     if not validation.is_valid:
         text = t("scan_invalid_address", lang, reason=validation.reason)
         if edit:
-            await message.edit_text(text, reply_markup=back_only(lang=lang))
-        else:
-            await message.answer(text, reply_markup=back_only(lang=lang))
+            try:
+                await message.edit_text(text, reply_markup=back_only(lang=lang))
+                return
+            except Exception:
+                pass
+        await message.answer(text, reply_markup=back_only(lang=lang))
         return
 
     user = await db.get_or_create_user(user_id)
@@ -102,9 +164,16 @@ async def perform_scan(
     allowed, error_message = await _check_scan_limit(user_id, plan, db, settings, lang)
     if not allowed:
         if edit:
-            await message.edit_text(error_message, parse_mode="HTML", reply_markup=back_only(lang=lang))
-        else:
-            await message.answer(error_message, parse_mode="HTML", reply_markup=back_only(lang=lang))
+            try:
+                await message.edit_text(
+                    error_message, parse_mode="HTML", reply_markup=back_only(lang=lang)
+                )
+                return
+            except Exception:
+                pass
+        await message.answer(
+            error_message, parse_mode="HTML", reply_markup=back_only(lang=lang)
+        )
         return
 
     try:
@@ -118,24 +187,30 @@ async def perform_scan(
         chain = analysis.get("chain") or validation.chain or "unknown"
         tracked = await _is_tracked(db, user_id, chain, address)
         text = format_token_report(analysis, lang=lang)
+        image_url = analysis.get("image_url")
         keyboard = result_actions(chain, address, tracked=tracked, lang=lang)
-        if edit:
-            await message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
-        else:
-            await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+
+        await _send_report(message, text, image_url, keyboard, edit=edit)
+
     except ProviderError:
         text = t("scan_unavailable", lang)
         if edit:
-            await message.edit_text(text, reply_markup=back_only(lang=lang))
-        else:
-            await message.answer(text, reply_markup=back_only(lang=lang))
+            try:
+                await message.edit_text(text, reply_markup=back_only(lang=lang))
+                return
+            except Exception:
+                pass
+        await message.answer(text, reply_markup=back_only(lang=lang))
     except Exception as exc:
         await db.log_error(f"Scan failed for {address}: {exc}")
         text = t("scan_unavailable", lang)
         if edit:
-            await message.edit_text(text, reply_markup=back_only(lang=lang))
-        else:
-            await message.answer(text, reply_markup=back_only(lang=lang))
+            try:
+                await message.edit_text(text, reply_markup=back_only(lang=lang))
+                return
+            except Exception:
+                pass
+        await message.answer(text, reply_markup=back_only(lang=lang))
 
 
 @router.callback_query(lambda callback: callback.data == "m:scan")

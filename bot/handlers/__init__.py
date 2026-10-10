@@ -3,6 +3,7 @@
 from aiogram import Router
 
 from bot.handlers import (
+    admin,
     alerts,
     help,
     market,
@@ -25,5 +26,6 @@ def get_routers() -> list[Router]:
         subscription.router,
         payments.router,
         wallets.router,
+        admin.router,
         help.router,
     ]

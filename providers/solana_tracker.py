@@ -64,6 +64,7 @@ class SolanaTrackerProvider(BaseProvider):
             "market_cap_usd": _float(
                 token.get("marketCap") or data.get("marketCap")
             ),
+            # Le VRAI nombre total de holders vient de cet endpoint.
             "holder_count": _int(token.get("holders") or data.get("holders")),
             # On renvoie les DEUX alias pour le scorer ET le formatter
             "freeze_authority_active": freeze_active,
@@ -72,7 +73,13 @@ class SolanaTrackerProvider(BaseProvider):
         }
 
     async def get_holder_stats(self, address: str) -> dict[str, Any]:
-        """Return holder concentration when available from Solana Tracker."""
+        """
+        Renvoie les statistiques de concentration des holders.
+
+        ⚠️ ATTENTION : l'API SolanaTracker renvoie seulement les TOP 100 holders
+        dans cet endpoint. On ne renvoie DONC PAS de 'holder_count' ici, car ça
+        écraserait le VRAI nombre total de holders qui vient de /tokens/{address}.
+        """
         data = await self._get_json(
             f"{self.base_url}/tokens/{address}/holders",
             headers=self._auth_headers(),
@@ -91,7 +98,7 @@ class SolanaTrackerProvider(BaseProvider):
             )
             raise ProviderError("Solana holder percentages unavailable")
         return {
-            "holder_count": len(holders),
+            # Volontairement PAS de holder_count ici : voir docstring
             "top10_holder_pct": sum(percentages[:10]),
             "top50_holder_pct": sum(percentages[:50]),
         }

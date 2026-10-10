@@ -73,6 +73,15 @@ STRINGS: dict[str, str] = {
         "\n⚠️ <i>Les actifs crypto sont très risqués. Faites toujours vos propres recherches avant de trader.</i>"
     ),
 
+    # Nouveaux : supply, decimals, liens
+    "report_supply": "💰 <b>Offre totale :</b> {value}",
+    "report_decimals": "🔢 <b>Décimales :</b> {value}",
+    "report_links": "🔗 <b>Liens</b>",
+    "report_link_website": "🌐 Site web",
+    "report_link_twitter": "🐦 Twitter",
+    "report_link_telegram": "📢 Telegram",
+    "report_link_dexscreener": "📊 DexScreener",
+
     # Suivi de wallet
     "wallet_menu": (
         "👛 <b>Outils wallet</b>\n\n"

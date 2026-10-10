@@ -609,6 +609,166 @@ class Database:
         )
 
     # ------------------------------------------------------------------
+    # Admin stats (dashboard)
+    # ------------------------------------------------------------------
+    async def count_total_users(self) -> int:
+        if self.backend == "supabase":
+            def run() -> int:
+                response = self.supabase.table("users").select("telegram_id", count="exact").execute()
+                return response.count or 0
+            return await asyncio.to_thread(run)
+        row = await self._sqlite_fetchone("SELECT COUNT(*) AS count FROM users")
+        return int(row["count"]) if row else 0
+
+    async def count_new_users_since(self, since_iso: str) -> int:
+        if self.backend == "supabase":
+            def run() -> int:
+                response = (
+                    self.supabase.table("users")
+                    .select("telegram_id", count="exact")
+                    .gte("created_at", since_iso)
+                    .execute()
+                )
+                return response.count or 0
+            return await asyncio.to_thread(run)
+        row = await self._sqlite_fetchone(
+            "SELECT COUNT(*) AS count FROM users WHERE created_at >= ?",
+            (since_iso,),
+        )
+        return int(row["count"]) if row else 0
+
+    async def count_users_by_plan(self) -> dict[str, int]:
+        if self.backend == "supabase":
+            def run() -> dict[str, int]:
+                response = self.supabase.table("users").select("plan").execute()
+                rows = response.data or []
+                result: dict[str, int] = {}
+                for r in rows:
+                    plan = str(r.get("plan") or "free").lower()
+                    result[plan] = result.get(plan, 0) + 1
+                return result
+            return await asyncio.to_thread(run)
+        rows = await self._sqlite_fetchall("SELECT plan FROM users")
+        result: dict[str, int] = {}
+        for r in rows:
+            plan = str(r.get("plan") or "free").lower()
+            result[plan] = result.get(plan, 0) + 1
+        return result
+
+    async def count_active_users_since(self, since_iso: str) -> int:
+        """Nombre d'utilisateurs distincts ayant fait un scan depuis une date."""
+        if self.backend == "supabase":
+            def run() -> int:
+                response = (
+                    self.supabase.table("scans")
+                    .select("telegram_id")
+                    .gte("created_at", since_iso)
+                    .execute()
+                )
+                rows = response.data or []
+                return len({r.get("telegram_id") for r in rows if r.get("telegram_id")})
+            return await asyncio.to_thread(run)
+        rows = await self._sqlite_fetchall(
+            "SELECT DISTINCT telegram_id FROM scans WHERE created_at >= ?",
+            (since_iso,),
+        )
+        return len(rows)
+
+    async def count_scans_since(self, since_iso: str) -> int:
+        if self.backend == "supabase":
+            def run() -> int:
+                response = (
+                    self.supabase.table("scans")
+                    .select("id", count="exact")
+                    .gte("created_at", since_iso)
+                    .execute()
+                )
+                return response.count or 0
+            return await asyncio.to_thread(run)
+        row = await self._sqlite_fetchone(
+            "SELECT COUNT(*) AS count FROM scans WHERE created_at >= ?",
+            (since_iso,),
+        )
+        return int(row["count"]) if row else 0
+
+    async def count_unique_tokens_scanned(self) -> int:
+        if self.backend == "supabase":
+            def run() -> int:
+                response = self.supabase.table("scans").select("contract_address").execute()
+                rows = response.data or []
+                return len({
+                    str(r.get("contract_address") or "").lower()
+                    for r in rows if r.get("contract_address")
+                })
+            return await asyncio.to_thread(run)
+        rows = await self._sqlite_fetchall("SELECT DISTINCT contract_address FROM scans")
+        return len(rows)
+
+    async def count_users_by_language(self) -> dict[str, int]:
+        if self.backend == "supabase":
+            def run() -> dict[str, int]:
+                response = self.supabase.table("users").select("language").execute()
+                rows = response.data or []
+                result: dict[str, int] = {}
+                for r in rows:
+                    lang = str(r.get("language") or "en").lower()
+                    result[lang] = result.get(lang, 0) + 1
+                return result
+            return await asyncio.to_thread(run)
+        rows = await self._sqlite_fetchall("SELECT language FROM users")
+        result: dict[str, int] = {}
+        for r in rows:
+            lang = str(r.get("language") or "en").lower()
+            result[lang] = result.get(lang, 0) + 1
+        return result
+
+    async def top_scanned_tokens(self, limit: int = 5) -> list[dict[str, Any]]:
+        if self.backend == "supabase":
+            def run() -> list[dict[str, Any]]:
+                response = self.supabase.table("scans").select("contract_address, chain").execute()
+                rows = response.data or []
+                counts: dict[str, dict[str, Any]] = {}
+                for r in rows:
+                    addr = str(r.get("contract_address") or "").lower()
+                    if not addr:
+                        continue
+                    if addr not in counts:
+                        counts[addr] = {"address": addr, "chain": r.get("chain") or "?", "count": 0}
+                    counts[addr]["count"] += 1
+                sorted_items = sorted(counts.values(), key=lambda x: x["count"], reverse=True)
+                return sorted_items[:limit]
+            return await asyncio.to_thread(run)
+        rows = await self._sqlite_fetchall(
+            "SELECT contract_address, chain, COUNT(*) AS count FROM scans GROUP BY contract_address, chain ORDER BY count DESC LIMIT ?",
+            (limit,),
+        )
+        return [
+            {
+                "address": r.get("contract_address"),
+                "chain": r.get("chain"),
+                "count": r.get("count"),
+            }
+            for r in rows
+        ]
+
+    async def list_recent_users(self, limit: int = 10) -> list[dict[str, Any]]:
+        if self.backend == "supabase":
+            def run() -> list[dict[str, Any]]:
+                response = (
+                    self.supabase.table("users")
+                    .select("telegram_id, plan, language, created_at")
+                    .order("created_at", desc=True)
+                    .limit(limit)
+                    .execute()
+                )
+                return response.data or []
+            return await asyncio.to_thread(run)
+        return await self._sqlite_fetchall(
+            "SELECT telegram_id, plan, language, created_at FROM users ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        )
+
+    # ------------------------------------------------------------------
     # Logs
     # ------------------------------------------------------------------
     async def log_error(self, message: str, level: str = "ERROR") -> None:

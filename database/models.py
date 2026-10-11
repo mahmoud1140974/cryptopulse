@@ -115,6 +115,8 @@ class Database:
             )
             self._ensure_column(conn, "users", "premium_until", "TEXT")
             self._ensure_column(conn, "users", "language", "TEXT")
+            self._ensure_column(conn, "users", "username", "TEXT")
+            self._ensure_column(conn, "users", "first_name", "TEXT")
 
     # ------------------------------------------------------------------
     # Helpers SQLite
@@ -139,25 +141,72 @@ class Database:
     # ------------------------------------------------------------------
     # Users
     # ------------------------------------------------------------------
-    async def get_or_create_user(self, telegram_id: int) -> dict[str, Any]:
+    async def get_or_create_user(
+        self,
+        telegram_id: int,
+        username: str | None = None,
+        first_name: str | None = None,
+    ) -> dict[str, Any]:
         if self.backend == "supabase":
-            return await self._supabase_get_or_create_user(telegram_id)
+            return await self._supabase_get_or_create_user(telegram_id, username, first_name)
         existing = await self._sqlite_fetchone("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
         if existing:
+            # Met à jour username/first_name s'ils ont changé
+            updates = []
+            params: list[Any] = []
+            if username and existing.get("username") != username:
+                updates.append("username = ?")
+                params.append(username)
+            if first_name and existing.get("first_name") != first_name:
+                updates.append("first_name = ?")
+                params.append(first_name)
+            if updates:
+                params.append(telegram_id)
+                await self._sqlite_execute(
+                    f"UPDATE users SET {', '.join(updates)} WHERE telegram_id = ?",
+                    tuple(params),
+                )
+                existing = await self._sqlite_fetchone("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
             return existing
-        row = {"telegram_id": telegram_id, "plan": "free", "created_at": utc_now()}
+        row = {
+            "telegram_id": telegram_id,
+            "plan": "free",
+            "created_at": utc_now(),
+            "username": username,
+            "first_name": first_name,
+        }
         await self._sqlite_execute(
-            "INSERT INTO users (telegram_id, plan, created_at) VALUES (?, ?, ?)",
-            (telegram_id, "free", row["created_at"]),
+            "INSERT INTO users (telegram_id, plan, created_at, username, first_name) VALUES (?, ?, ?, ?, ?)",
+            (telegram_id, "free", row["created_at"], username, first_name),
         )
         return row
 
-    async def _supabase_get_or_create_user(self, telegram_id: int) -> dict[str, Any]:
+    async def _supabase_get_or_create_user(
+        self,
+        telegram_id: int,
+        username: str | None = None,
+        first_name: str | None = None,
+    ) -> dict[str, Any]:
         def run() -> dict[str, Any]:
             response = self.supabase.table("users").select("*").eq("telegram_id", telegram_id).execute()
             if response.data:
-                return response.data[0]
-            payload = {"telegram_id": telegram_id, "plan": "free", "created_at": utc_now()}
+                user = response.data[0]
+                updates = {}
+                if username and user.get("username") != username:
+                    updates["username"] = username
+                if first_name and user.get("first_name") != first_name:
+                    updates["first_name"] = first_name
+                if updates:
+                    self.supabase.table("users").update(updates).eq("telegram_id", telegram_id).execute()
+                    user.update(updates)
+                return user
+            payload = {
+                "telegram_id": telegram_id,
+                "plan": "free",
+                "created_at": utc_now(),
+                "username": username,
+                "first_name": first_name,
+            }
             inserted = self.supabase.table("users").insert(payload).execute()
             return inserted.data[0] if inserted.data else payload
         return await asyncio.to_thread(run)
@@ -751,21 +800,22 @@ class Database:
             for r in rows
         ]
 
-    async def list_recent_users(self, limit: int = 10) -> list[dict[str, Any]]:
+    async def list_recent_users_with_info(self, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
+        """Renvoie les derniers utilisateurs inscrits avec leurs infos Telegram."""
         if self.backend == "supabase":
             def run() -> list[dict[str, Any]]:
                 response = (
                     self.supabase.table("users")
-                    .select("telegram_id, plan, language, created_at")
+                    .select("telegram_id, plan, language, created_at, username, first_name")
                     .order("created_at", desc=True)
-                    .limit(limit)
+                    .range(offset, offset + limit - 1)
                     .execute()
                 )
                 return response.data or []
             return await asyncio.to_thread(run)
         return await self._sqlite_fetchall(
-            "SELECT telegram_id, plan, language, created_at FROM users ORDER BY created_at DESC LIMIT ?",
-            (limit,),
+            "SELECT telegram_id, plan, language, created_at, username, first_name FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (limit, offset),
         )
 
     # ------------------------------------------------------------------

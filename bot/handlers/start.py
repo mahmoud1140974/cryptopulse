@@ -24,19 +24,26 @@ router = Router(name="start")
 
 
 async def _ensure_user_with_admin_bypass(
-    telegram_id: int,
+    message: Message,
     db: Database,
     settings: Settings,
 ) -> dict:
     """Crée l'utilisateur. Si admin, force Premium permanent."""
-    user = await db.get_or_create_user(telegram_id)
+    user_from_tg = message.from_user
+    telegram_id = user_from_tg.id
+    username = user_from_tg.username
+    first_name None = user_from_tg.first_name
+
+:
+    """    user = await db.get_or_create_user(telegram_id, username=username, first_name=first_name)
+
     if settings.admin_telegram_id and telegram_id == settings.admin_telegram_id:
         current_plan = (user or {}).get("plan")
         current_expires = (user or {}).get("premium_until")
         if current_plan != "premium" or current_expires:
             try:
                 await db.set_user_plan(telegram_id, "premium", None)
-                user = await db.get_or_create_user(telegram_id)
+                user = await db.get_or_create_user(telegram_id, username=username, first_name=first_name)
             except Exception:
                 pass
     return user or {}
@@ -55,7 +62,7 @@ async def start_handler(
     db: Database,
     settings: Settings,
 ) -> None:
-    user = await _ensure_user_with_admin_bypass(message.from_user.id, db, settings)
+    user = await _ensure_user_with_admin_bypass(message, db, settings)
 
     # Premier lancement : demander la langue
     if not user.get("language"):
@@ -136,10 +143,9 @@ async def noop_handler(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(
-    lambda callback: callback.data in {"m:whales", "m:settings"}
+    lambda callback: callback.data in {"m:whales", "m:settings", "m:trending", "m:news"}
 )
-async def phase_placeholder(callback: CallbackQuery, db: Database) -> None:
-    """Whales et Settings arrivent dans une phase ultérieure."""
+async def phase_placeholder(callback: CallbackQuery, db: Database) ->Features non encore implémentées."""
     lang = await _get_user_lang(callback.from_user.id, db)
     await callback.message.edit_text(
         t("feature_coming_soon", lang),

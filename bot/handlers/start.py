@@ -32,10 +32,13 @@ async def _ensure_user_with_admin_bypass(
     user_from_tg = message.from_user
     telegram_id = user_from_tg.id
     username = user_from_tg.username
-    first_name None = user_from_tg.first_name
+    first_name = user_from_tg.first_name
 
-:
-    """    user = await db.get_or_create_user(telegram_id, username=username, first_name=first_name)
+    user = await db.get_or_create_user(
+        telegram_id,
+        username=username,
+        first_name=first_name,
+    )
 
     if settings.admin_telegram_id and telegram_id == settings.admin_telegram_id:
         current_plan = (user or {}).get("plan")
@@ -43,7 +46,11 @@ async def _ensure_user_with_admin_bypass(
         if current_plan != "premium" or current_expires:
             try:
                 await db.set_user_plan(telegram_id, "premium", None)
-                user = await db.get_or_create_user(telegram_id, username=username, first_name=first_name)
+                user = await db.get_or_create_user(
+                    telegram_id,
+                    username=username,
+                    first_name=first_name,
+                )
             except Exception:
                 pass
     return user or {}
@@ -64,7 +71,6 @@ async def start_handler(
 ) -> None:
     user = await _ensure_user_with_admin_bypass(message, db, settings)
 
-    # Premier lancement : demander la langue
     if not user.get("language"):
         await message.answer(
             t("choose_language", DEFAULT_LANG),
@@ -83,7 +89,6 @@ async def start_handler(
 
 @router.callback_query(F.data.startswith("lang:"))
 async def set_initial_language(callback: CallbackQuery, db: Database) -> None:
-    """Choix initial de la langue au premier démarrage."""
     code = callback.data.split(":", 1)[1]
     if not is_supported(code):
         await callback.answer("Unsupported language", show_alert=True)
@@ -101,7 +106,6 @@ async def set_initial_language(callback: CallbackQuery, db: Database) -> None:
 
 @router.callback_query(F.data.startswith("setlang:"))
 async def change_language(callback: CallbackQuery, db: Database) -> None:
-    """Changement de langue depuis /language."""
     code = callback.data.split(":", 1)[1]
     if not is_supported(code):
         await callback.answer("Unsupported language", show_alert=True)
@@ -145,7 +149,8 @@ async def noop_handler(callback: CallbackQuery) -> None:
 @router.callback_query(
     lambda callback: callback.data in {"m:whales", "m:settings", "m:trending", "m:news"}
 )
-async def phase_placeholder(callback: CallbackQuery, db: Database) ->Features non encore implémentées."""
+async def phase_placeholder(callback: CallbackQuery, db: Database) -> None:
+    """Features non encore implémentées."""
     lang = await _get_user_lang(callback.from_user.id, db)
     await callback.message.edit_text(
         t("feature_coming_soon", lang),

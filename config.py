@@ -33,8 +33,8 @@ PLAN_LIMITS: dict[str, dict] = {
         "history_days": 7,
     },
     "pro": {
-        "scans_per_month": None,      # 50/jour = quasi illimité pour nous
-        "scans_per_day": 50,          # mais on garde une limite par jour
+        "scans_per_month": None,
+        "scans_per_day": 50,
         "watchlist_max": 15,
         "alert_interval": 5,
         "wallets_max": 3,
@@ -43,7 +43,7 @@ PLAN_LIMITS: dict[str, dict] = {
     },
     "premium": {
         "scans_per_month": None,
-        "scans_per_day": None,        # illimité
+        "scans_per_day": None,
         "watchlist_max": 200,
         "alert_interval": 1,
         "wallets_max": 20,
@@ -69,6 +69,8 @@ class Settings:
     supabase_url: str | None = None
     supabase_anon_key: str | None = None
     admin_telegram_id: int | None = None
+    radar_bot_token: str | None = None
+    radar_channel_id: str | None = None
     free_scan_limit: int = 10
     free_watchlist_limit: int = 5
     free_alert_interval_minutes: int = 15
@@ -91,6 +93,8 @@ class Settings:
             supabase_url=os.getenv("SUPABASE_URL"),
             supabase_anon_key=os.getenv("SUPABASE_ANON_KEY"),
             admin_telegram_id=int(admin_id) if admin_id else None,
+            radar_bot_token=os.getenv("RADAR_BOT_TOKEN"),
+            radar_channel_id=os.getenv("RADAR_CHANNEL_ID"),
             free_scan_limit=_int_env("FREE_SCAN_LIMIT", 10),
             free_watchlist_limit=_int_env("FREE_WATCHLIST_LIMIT", 5),
             free_alert_interval_minutes=_int_env("FREE_ALERT_INTERVAL_MINUTES", 15),
@@ -116,6 +120,10 @@ class Settings:
     @property
     def solana_tracker_configured(self) -> bool:
         return bool(self.solana_tracker_api_key)
+
+    @property
+    def radar_configured(self) -> bool:
+        return bool(self.radar_bot_token and self.radar_channel_id)
 
     def require_bot_token(self) -> None:
         if not self.bot_token:

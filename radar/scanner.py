@@ -1,4 +1,4 @@
-"""Radar scanner — fetches new memecoin pools from GeckoTerminal."""
+"""Radar scanner — fetches new memecoin pools from GeckoTerminal + DexScreener."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 GECKO_TERMINAL_BASE = "https://api.geckoterminal.com/api/v2"
+DEXSCREENER_BASE = "https://api.dexscreener.com"
 
 NETWORKS = ["eth", "solana", "bsc", "base"]
 
@@ -25,13 +26,34 @@ NETWORK_TO_CHAIN = {
 
 
 class RadarScanner:
-    """Fetches new pools from GeckoTerminal (free, no key required)."""
+    """Fetches new pools from free sources."""
 
     def __init__(self, timeout: float = 15.0) -> None:
         self.timeout = timeout
 
+    async def fetch_all_networks(self, limit_per_network: int = 20) -> list[dict[str, Any]]:
+        """Fetch new pools from all networks."""
+        import asyncio
+
+        tasks = [self.fetch_new_pools(net, limit_per_network) for net in NETWORKS]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        all_pools: list[dict[str, Any]] = []
+        seen_addresses: set[str] = set()
+
+        for r in results:
+            if isinstance(r, Exception) or not r:
+                continue
+            for pool in r:
+                addr = str(pool.get("address") or "").lower()
+                if addr and addr not in seen_addresses:
+                    seen_addresses.add(addr)
+                    all_pools.append(pool)
+
+        return all_pools
+
     async def fetch_new_pools(self, network: str, limit: int = 20) -> list[dict[str, Any]]:
-        """Fetch the newest pools on a network."""
+        """Fetch the newest pools on a network from GeckoTerminal."""
         url = f"{GECKO_TERMINAL_BASE}/networks/{network}/new_pools"
         headers = {"Accept": "application/json"}
 
@@ -101,6 +123,12 @@ class RadarScanner:
         fdv_usd = _f(attributes.get("fdv_usd"))
         mcap_usd = _f(attributes.get("market_cap_usd"))
 
+        # Variations de prix (nouveaux champs pour filtrer les pumpés)
+        change_data = attributes.get("price_change_percentage") or {}
+        change_h1 = _f(change_data.get("h1"))
+        change_h6 = _f(change_data.get("h6"))
+        change_h24 = _f(change_data.get("h24"))
+
         volume_24h = None
         vol_data = attributes.get("volume_usd") or {}
         if isinstance(vol_data, dict):
@@ -116,4 +144,7 @@ class RadarScanner:
             "volume_24h_usd": volume_24h,
             "market_cap_usd": mcap_usd or fdv_usd,
             "pair_created_at": created_ms,
+            "price_change_h1": change_h1,
+            "price_change_h6": change_h6,
+            "price_change_h24": change_h24,
         }

@@ -45,9 +45,8 @@ async def create_app_components(settings: Settings):
         dp.include_router(router)
 
     alert_engine = AlertEngine(db, analyzer, bot=bot)
-    # On passe explicitement db au scheduler pour le job d'expiration des abonnements
     scheduler = AlertScheduler(settings, alert_engine, db=db)
-    return bot, dp, db, scheduler
+    return bot, dp, db, scheduler, analyzer
 
 
 async def health_ok(request: web.Request) -> web.Response:
@@ -77,7 +76,6 @@ async def start_health_server(settings: Settings, bot: Bot, dp: Dispatcher) -> N
     await site.start()
     logger.info("Health server listening on 0.0.0.0:%s", port)
 
-    # Keep this task alive so asyncio.gather does not finish immediately.
     await asyncio.Event().wait()
 
 
@@ -93,18 +91,57 @@ async def run_telegram_bot(settings: Settings, bot: Bot, dp: Dispatcher) -> None
         await dp.start_polling(bot)
 
 
+async def start_radar(settings: Settings, analyzer: TokenAnalyzer) -> None:
+    """
+    Démarre le bot Radar (séparé) qui poste dans le channel.
+    Seulement si RADAR_BOT_TOKEN + RADAR_CHANNEL_ID sont configurés.
+    """
+    if not settings.radar_configured:
+        logger.info("Radar: not configured, skipping (RADAR_BOT_TOKEN / RADAR_CHANNEL_ID missing)")
+        return
+
+    try:
+        from radar.bot import RadarBot
+    except Exception as exc:
+        logger.error("Radar: import failed: %s", exc)
+        return
+
+    try:
+        radar = RadarBot(
+            settings=settings,
+            analyzer=analyzer,
+            bot_token=settings.radar_bot_token,
+            channel_id=settings.radar_channel_id,
+        )
+        radar.start_scheduler()
+        logger.info("Radar: started successfully (channel=%s)", settings.radar_channel_id)
+
+        # Premier scan au démarrage (30 sec après le lancement)
+        await asyncio.sleep(30)
+        try:
+            await radar.scan_and_post()
+        except Exception as exc:
+            logger.error("Radar: first scan failed: %s", exc)
+
+        # Maintient la tâche active
+        await asyncio.Event().wait()
+    except Exception as exc:
+        logger.error("Radar: startup failed: %s", exc)
+
+
 async def main() -> None:
     settings = Settings.from_env()
     logging.basicConfig(level=getattr(logging, settings.log_level, logging.INFO))
     settings.require_bot_token()
 
-    bot, dp, db, scheduler = await create_app_components(settings)
+    bot, dp, db, scheduler, analyzer = await create_app_components(settings)
     scheduler.start()
 
     try:
         await asyncio.gather(
             start_health_server(settings, bot, dp),
             run_telegram_bot(settings, bot, dp),
+            start_radar(settings, analyzer),
         )
     finally:
         scheduler.shutdown()

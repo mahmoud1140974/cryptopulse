@@ -1,7 +1,7 @@
 """Radar filter — applies quality criteria to new tokens.
 
 Objectif : trouver les tokens qui viennent de lancer MAIS qui n'ont PAS
-encore explosé. C'est là qu'est la vraie valeur pour les traders.
+encore explosé, dans la "golden zone" de market cap (40K-200K).
 """
 
 from __future__ import annotations
@@ -17,12 +17,17 @@ MIN_HOLDERS = 100
 MAX_TOP10_PCT = 60
 MAX_RISK_SCORE = 40
 
-# --- Filtres ANTI-PUMP (nouveaux, critiques) ---
+# --- Filtre MARKET CAP (la golden zone) ---
+# En dessous : trop risqué (rug en 5 min)
+# Au-dessus : déjà pumpé (pas de potentiel)
+MIN_MCAP_USD = 40_000
+MAX_MCAP_USD = 200_000
+
+# --- Filtres ANTI-PUMP ---
 # On ne poste PAS un token qui a déjà fait une grosse variation.
-# Sinon les utilisateurs achètent au top et se font rug.
-MAX_PRICE_CHANGE_H1 = 50.0     # max +50% sur 1h
-MAX_PRICE_CHANGE_H6 = 100.0    # max +100% sur 6h
-MAX_PRICE_CHANGE_H24 = 200.0   # max +200% sur 24h
+MAX_PRICE_CHANGE_H1 = 50.0
+MAX_PRICE_CHANGE_H6 = 100.0
+MAX_PRICE_CHANGE_H24 = 200.0
 
 
 def calculate_age_hours(pair_created_at_ms: int | None) -> float | None:
@@ -37,6 +42,7 @@ def apply_filters(analysis: dict[str, Any]) -> tuple[bool, str]:
     Si passed=True, reason est vide.
     """
     liquidity = analysis.get("liquidity_usd") or 0
+    mcap = analysis.get("market_cap_usd")
     holders = analysis.get("holder_count") or 0
     top10 = analysis.get("top10_holder_pct")
     risk = (analysis.get("risk") or {}).get("score")
@@ -53,6 +59,14 @@ def apply_filters(analysis: dict[str, Any]) -> tuple[bool, str]:
         return False, f"already pumped +{change_h6:.0f}% in 6h"
     if change_h24 is not None and change_h24 > MAX_PRICE_CHANGE_H24:
         return False, f"already pumped +{change_h24:.0f}% in 24h"
+
+    # --- Filtre MARKET CAP (golden zone) ---
+    if mcap is None:
+        return False, "market cap unknown"
+    if mcap < MIN_MCAP_USD:
+        return False, f"mcap ${mcap:.0f} < ${MIN_MCAP_USD} (too risky)"
+    if mcap > MAX_MCAP_USD:
+        return False, f"mcap ${mcap:.0f} > ${MAX_MCAP_USD} (already pumped)"
 
     # --- Filtres de qualité ---
     if liquidity < MIN_LIQUIDITY_USD:
@@ -86,6 +100,7 @@ def calculate_signal(analysis: dict[str, Any]) -> str:
     """Returns 'BUY', 'WATCH', or 'AVOID'."""
     risk = (analysis.get("risk") or {}).get("score") or 100
     liquidity = analysis.get("liquidity_usd") or 0
+    mcap = analysis.get("market_cap_usd") or 0
     top10 = analysis.get("top10_holder_pct")
     change_h1 = analysis.get("price_change_h1") or 0
 
@@ -98,10 +113,12 @@ def calculate_signal(analysis: dict[str, Any]) -> str:
     if change_h1 > 50:
         return "AVOID"
 
-    # BUY : score très bas, liquidité solide, holders bien répartis, pas encore pumpé
+    # BUY : score très bas + liquidité solide + holders bien répartis
+    # + pas encore pumpé + mcap dans la zone basse
     if (
         risk <= 25
         and liquidity >= 50_000
+        and mcap <= 120_000
         and (top10 is None or top10 < 40)
         and change_h1 < 20
     ):

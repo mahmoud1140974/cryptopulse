@@ -63,7 +63,7 @@ class RadarBot:
         logger.info("Radar: scan started")
 
         try:
-            pools = await self.scanner.fetch_all_networks(limit_per_network=20)
+            pools = await self.scanner.fetch_all_sources(limit_per_source=25)
         except Exception as exc:
             logger.error("Radar: scanner failed: %s", exc)
             return {"posted": 0, "errors": 1}
@@ -89,9 +89,16 @@ class RadarBot:
                     logger.debug("analyze failed for %s: %s", address, exc)
                     continue
 
-                # Fusionne les données du pool (variations) avec l'analyse
-                for k in ("price_change_h1", "price_change_h6", "price_change_h24"):
-                    if pool.get(k) is not None:
+                # Fusionne les données du pool (variations, image, liens)
+                for k in (
+                    "price_change_h1",
+                    "price_change_h6",
+                    "price_change_h24",
+                    "image_uri",
+                    "twitter_url",
+                    "website_url",
+                ):
+                    if pool.get(k) is not None and not analysis.get(k):
                         analysis[k] = pool[k]
                 if pool.get("pair_created_at") and not analysis.get("pair_created_at"):
                     analysis["pair_created_at"] = pool.get("pair_created_at")

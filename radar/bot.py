@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -16,6 +17,7 @@ from analysis.token_analyzer import TokenAnalyzer
 from config import Settings
 from radar.filter import apply_filters, calculate_signal
 from radar.formatter import (
+    build_sniper_keyboard,
     format_daily_recap,
     format_daily_stats,
     format_new_token_post,
@@ -51,6 +53,18 @@ class RadarBot:
         )
         self.scheduler = AsyncIOScheduler()
 
+        # Charge la clé Jupiter pour les liens Sniper
+        try:
+            from radar.sniper import set_jupiter_key
+            jupiter_key = os.getenv("JUPITER_REFERRAL_KEY")
+            set_jupiter_key(jupiter_key)
+            if jupiter_key:
+                logger.info("Radar: Jupiter referral key loaded")
+            else:
+                logger.warning("Radar: JUPITER_REFERRAL_KEY missing — Solana snipes without referral")
+        except Exception as exc:
+            logger.warning("Radar: could not load Jupiter key: %s", exc)
+
         # Compteurs du jour
         self.today_stats = {"scanned": 0, "posted": 0, "buy": 0, "watch": 0, "avoid": 0}
         self.today_tokens: list[dict[str, Any]] = []
@@ -78,11 +92,9 @@ class RadarBot:
                 if not address or not chain:
                     continue
 
-                # Anti-doublon
                 if await self.storage.already_posted(address, chain):
                     continue
 
-                # Analyse complète (prix, holders, honeypot, etc.)
                 try:
                     analysis = await self.analyzer.analyze(address, chain_hint=chain)
                 except Exception as exc:
@@ -103,23 +115,25 @@ class RadarBot:
                 if pool.get("pair_created_at") and not analysis.get("pair_created_at"):
                     analysis["pair_created_at"] = pool.get("pair_created_at")
 
-                # Filtres qualité + anti-pump
                 passed, reason = apply_filters(analysis)
                 if not passed:
                     logger.debug("filtered out %s: %s", address, reason)
                     continue
 
-                # Signal
                 signal = calculate_signal(analysis)
 
-                # Post
+                # Post avec bouton Sniper
                 text = format_new_token_post(analysis, signal)
-                await self.bot.send_message(self.channel_id, text, disable_web_page_preview=True)
+                keyboard = build_sniper_keyboard(analysis)
+                await self.bot.send_message(
+                    self.channel_id,
+                    text,
+                    disable_web_page_preview=True,
+                    reply_markup=keyboard,
+                )
 
-                # Persiste
                 await self.storage.save_posted(analysis, signal)
 
-                # Stats
                 self.today_stats["posted"] += 1
                 if signal == "BUY":
                     self.today_stats["buy"] += 1
@@ -136,7 +150,6 @@ class RadarBot:
                 posted += 1
                 logger.info("Radar: posted %s (%s)", analysis.get("symbol"), signal)
 
-                # Petite pause anti-spam entre 2 posts
                 await asyncio.sleep(2)
 
             except Exception as exc:
@@ -150,7 +163,6 @@ class RadarBot:
     # Job 2 : updates 6h / 24h (toutes les heures)
     # ------------------------------------------------------------------
     async def send_updates(self) -> None:
-        """Envoie les updates 6h et 24h pour les tokens déjà postés."""
         for hours in (6, 24):
             try:
                 tokens = await self.storage.list_for_update(hours_ago=float(hours))
@@ -185,7 +197,7 @@ class RadarBot:
                     logger.error("Radar: update failed for %s: %s", token.get("id"), exc)
 
     # ------------------------------------------------------------------
-    # Job 3 : tip du jour (une fois par jour)
+    # Job 3 : tip du jour
     # ------------------------------------------------------------------
     async def send_tip(self) -> None:
         try:
@@ -195,20 +207,19 @@ class RadarBot:
             logger.error("Radar: tip failed: %s", exc)
 
     # ------------------------------------------------------------------
-    # Job 4 : récap quotidien (fin de journée)
+    # Job 4 : récap quotidien
     # ------------------------------------------------------------------
     async def send_daily_recap(self) -> None:
         try:
             text = format_daily_recap(self.today_tokens, self.today_stats)
             await self.bot.send_message(self.channel_id, text, disable_web_page_preview=True)
-            # Reset pour le lendemain
             self.today_tokens = []
             self.today_stats = {"scanned": 0, "posted": 0, "buy": 0, "watch": 0, "avoid": 0}
         except Exception as exc:
             logger.error("Radar: daily recap failed: %s", exc)
 
     # ------------------------------------------------------------------
-    # Job 5 : stats du matin (bilan de la veille)
+    # Job 5 : stats du matin
     # ------------------------------------------------------------------
     async def send_daily_stats(self) -> None:
         try:
@@ -224,7 +235,6 @@ class RadarBot:
         if self.scheduler.running:
             return
 
-        # Scan toutes les 15 min
         self.scheduler.add_job(
             self.scan_and_post,
             "interval",
@@ -235,7 +245,6 @@ class RadarBot:
             coalesce=True,
         )
 
-        # Updates toutes les heures
         self.scheduler.add_job(
             self.send_updates,
             "interval",
@@ -246,7 +255,6 @@ class RadarBot:
             coalesce=True,
         )
 
-        # Tip quotidien à 15:00 UTC
         self.scheduler.add_job(
             self.send_tip,
             "cron",
@@ -256,7 +264,6 @@ class RadarBot:
             replace_existing=True,
         )
 
-        # Recap quotidien à 20:00 UTC
         self.scheduler.add_job(
             self.send_daily_recap,
             "cron",
@@ -266,7 +273,6 @@ class RadarBot:
             replace_existing=True,
         )
 
-        # Stats du matin à 08:00 UTC
         self.scheduler.add_job(
             self.send_daily_stats,
             "cron",

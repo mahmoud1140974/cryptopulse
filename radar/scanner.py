@@ -1,17 +1,19 @@
-"""Radar scanner — fetches new memecoin pools from GeckoTerminal + DexScreener."""
+"""Radar scanner — fetches new memecoin pools from GeckoTerminal + Pump.fun."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Any
 
 import httpx
 
+from radar.pumpfun import PumpFunScanner
+
 logger = logging.getLogger(__name__)
 
 GECKO_TERMINAL_BASE = "https://api.geckoterminal.com/api/v2"
-DEXSCREENER_BASE = "https://api.dexscreener.com"
 
 NETWORKS = ["eth", "solana", "bsc", "base"]
 
@@ -26,15 +28,55 @@ NETWORK_TO_CHAIN = {
 
 
 class RadarScanner:
-    """Fetches new pools from free sources."""
+    """Fetches new pools from multiple free sources."""
 
     def __init__(self, timeout: float = 15.0) -> None:
         self.timeout = timeout
+        self.pumpfun = PumpFunScanner(timeout=timeout)
+
+    async def fetch_all_sources(self, limit_per_source: int = 25) -> list[dict[str, Any]]:
+        """
+        Récupère les tokens depuis toutes les sources :
+        - GeckoTerminal (EVM + Solana)
+        - Pump.fun (Solana uniquement)
+        """
+        gecko_task = self.fetch_all_networks(limit_per_network=limit_per_source)
+        pumpfun_task = self.pumpfun.fetch_new_tokens(limit=limit_per_source * 2)
+
+        gecko_results, pumpfun_results = await asyncio.gather(
+            gecko_task, pumpfun_task, return_exceptions=True
+        )
+
+        all_pools: list[dict[str, Any]] = []
+        seen_addresses: set[str] = set()
+
+        # GeckoTerminal d'abord
+        if not isinstance(gecko_results, Exception) and gecko_results:
+            for pool in gecko_results:
+                addr = str(pool.get("address") or "").lower()
+                if addr and addr not in seen_addresses:
+                    seen_addresses.add(addr)
+                    all_pools.append(pool)
+
+        # Puis Pump.fun (on évite les doublons)
+        if not isinstance(pumpfun_results, Exception) and pumpfun_results:
+            for pool in pumpfun_results:
+                addr = str(pool.get("address") or "").lower()
+                if addr and addr not in seen_addresses:
+                    seen_addresses.add(addr)
+                    all_pools.append(pool)
+
+        logger.info(
+            "Radar scanner: %d tokens from gecko + %d from pumpfun = %d unique",
+            len(gecko_results) if not isinstance(gecko_results, Exception) and gecko_results else 0,
+            len(pumpfun_results) if not isinstance(pumpfun_results, Exception) and pumpfun_results else 0,
+            len(all_pools),
+        )
+
+        return all_pools
 
     async def fetch_all_networks(self, limit_per_network: int = 20) -> list[dict[str, Any]]:
-        """Fetch new pools from all networks."""
-        import asyncio
-
+        """Fetch new pools from all GeckoTerminal networks."""
         tasks = [self.fetch_new_pools(net, limit_per_network) for net in NETWORKS]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -123,7 +165,6 @@ class RadarScanner:
         fdv_usd = _f(attributes.get("fdv_usd"))
         mcap_usd = _f(attributes.get("market_cap_usd"))
 
-        # Variations de prix (nouveaux champs pour filtrer les pumpés)
         change_data = attributes.get("price_change_percentage") or {}
         change_h1 = _f(change_data.get("h1"))
         change_h6 = _f(change_data.get("h6"))
@@ -147,4 +188,5 @@ class RadarScanner:
             "price_change_h1": change_h1,
             "price_change_h6": change_h6,
             "price_change_h24": change_h24,
+            "source": "geckoterminal",
         }

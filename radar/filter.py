@@ -60,7 +60,40 @@ def apply_filters(analysis: dict[str, Any]) -> tuple[bool, str]:
     if change_h24 is not None and change_h24 > MAX_PRICE_CHANGE_H24:
         return False, f"already pumped +{change_h24:.0f}% in 24h"
 
-    # --- Filtre MARKET CAP (golden zone) ---
+    # =====================================================================
+    # --- RÈGLE SPÉCIALE PUMP.FUN / SOLANA (SANS SOLANA TRACKER) ---
+    # =====================================================================
+    if analysis.get("chain") == "solana" or analysis.get("source") == "pumpfun":
+        # On vérifie le market cap
+        if mcap is None:
+            return False, "market cap unknown"
+        if mcap < MIN_MCAP_USD:
+            return False, f"mcap ${mcap:.0f} < ${MIN_MCAP_USD} (too risky)"
+        if mcap > MAX_MCAP_USD:
+            return False, f"mcap ${mcap:.0f} > ${MAX_MCAP_USD} (already pumped)"
+        
+        # On vérifie l'âge
+        if age_hours is not None:
+            if age_hours < MIN_AGE_HOURS:
+                return False, f"too young ({age_hours:.1f}h)"
+            if age_hours > MAX_AGE_HOURS:
+                return False, f"too old ({age_hours:.1f}h)"
+        
+        # On utilise le nombre de commentaires (reply_count) comme signal de "hype"
+        reply_count = analysis.get("reply_count") or 0
+        if reply_count < 5: # Moins de 5 commentaires sur Pump.fun = on ignore
+            return False, f"not enough hype ({reply_count} replies)"
+            
+        # Si c'est "complete" (passé sur Raydium) c'est un très bon signe, on accepte direct
+        if analysis.get("complete") is True:
+            return True, ""
+
+        return True, ""
+    # =====================================================================
+    # --- FIN RÈGLE SPÉCIALE ---
+    # =====================================================================
+
+    # --- Filtre MARKET CAP (golden zone) pour EVM (Base, ETH, BSC) ---
     if mcap is None:
         return False, "market cap unknown"
     if mcap < MIN_MCAP_USD:
@@ -68,7 +101,7 @@ def apply_filters(analysis: dict[str, Any]) -> tuple[bool, str]:
     if mcap > MAX_MCAP_USD:
         return False, f"mcap ${mcap:.0f} > ${MAX_MCAP_USD} (already pumped)"
 
-    # --- Filtres de qualité ---
+    # --- Filtres de qualité EVM ---
     if liquidity < MIN_LIQUIDITY_USD:
         return False, f"liquidity ${liquidity:.0f} < ${MIN_LIQUIDITY_USD}"
 
@@ -98,6 +131,27 @@ def apply_filters(analysis: dict[str, Any]) -> tuple[bool, str]:
 
 def calculate_signal(analysis: dict[str, Any]) -> str:
     """Returns 'BUY', 'WATCH', or 'AVOID'."""
+    
+    # =====================================================================
+    # --- LOGIQUE SPÉCIALE POUR SOLANA / PUMP.FUN ---
+    # =====================================================================
+    if analysis.get("chain") == "solana" or analysis.get("source") == "pumpfun":
+        change_h1 = analysis.get("price_change_h1") or 0
+        if change_h1 > 50:
+            return "AVOID"
+            
+        mcap = analysis.get("market_cap_usd") or 0
+        reply_count = analysis.get("reply_count") or 0
+        
+        # Si très commenté ou Complete, c'est un BUY
+        if analysis.get("complete") is True or reply_count > 15:
+            if MIN_MCAP_USD <= mcap <= 120_000: # Dans la zone basse de la golden zone
+                return "BUY"
+                
+        return "WATCH"
+    # =====================================================================
+
+    # --- LOGIQUE EVM ORIGINALE ---
     risk = (analysis.get("risk") or {}).get("score") or 100
     liquidity = analysis.get("liquidity_usd") or 0
     mcap = analysis.get("market_cap_usd") or 0

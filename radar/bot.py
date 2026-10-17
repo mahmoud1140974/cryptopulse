@@ -95,11 +95,23 @@ class RadarBot:
                 if await self.storage.already_posted(address, chain):
                     continue
 
-                try:
-                    analysis = await self.analyzer.analyze(address, chain_hint=chain)
-                except Exception as exc:
-                    logger.debug("analyze failed for %s: %s", address, exc)
-                    continue
+                # --- MODIFICATION ICI : ON CONTOURNE SOLANA TRACKER POUR SOLANA ---
+                if chain == "solana":
+                    # On utilise directement les données du scanner (Pump.fun)
+                    analysis = dict(pool) # On copie les données
+                    # On crée de fausses données de sécurité pour ne pas faire planter le formateur
+                    analysis["risk"] = {"score": None, "factors": {}} 
+                    analysis["holder_count"] = None
+                    analysis["top10_holder_pct"] = None
+                    analysis["is_honeypot"] = False
+                else:
+                    # Pour ETH, BSC, Base : on garde l'analyse normale (TokenAnalyzer)
+                    try:
+                        analysis = await self.analyzer.analyze(address, chain_hint=chain)
+                    except Exception as exc:
+                        logger.debug("analyze failed for %s: %s", address, exc)
+                        continue
+                # -------------------------------------------------------------------
 
                 # Fusionne les données du pool (variations, image, liens)
                 for k in (
@@ -181,6 +193,12 @@ class RadarBot:
                     chain = token.get("chain")
                     if not address:
                         continue
+
+                    # --- MODIFICATION ICI : ON IGNORE LES UPDATES SOLANA POUR ÉVITER LE CRASH ---
+                    if chain == "solana":
+                        logger.debug("Skipping Solana update for %s to save API quota", address)
+                        continue # On passe au token suivant sans faire d'appel API
+                    # ---------------------------------------------------------------------------
 
                     current = await self.analyzer.analyze(address, chain_hint=chain)
                     text = format_update_post(token, current, hours)

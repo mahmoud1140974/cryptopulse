@@ -5,6 +5,9 @@ from __future__ import annotations
 import html
 from typing import Any
 
+# --- AJOUT DES IMPORTS POUR LES BOUTONS TELEGRAM ---
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+# ---------------------------------------------------
 
 def _escape(text: Any) -> str:
     return html.escape(str(text or ""), quote=False)
@@ -239,3 +242,29 @@ def format_tip_of_the_day() -> str:
         "High buy/sell tax (>10%) = you lose money on every trade. Avoid.",
     ]
     return "🎓 <b>TIP OF THE DAY</b>\n\n" + random.choice(tips)
+
+
+# =====================================================================
+# --- FONCTION AJOUTÉE ICI POUR CORRIGER L'ERREUR ---
+# =====================================================================
+def build_sniper_keyboard(analysis: dict[str, Any]) -> InlineKeyboardMarkup:
+    """Crée les boutons d'action (Snipe / Chart) pour Telegram."""
+    address = analysis.get("address")
+    chain = str(analysis.get("chain") or "ethereum").lower()
+    
+    buttons = []
+    
+    # 1. Bouton DexScreener (Toujours présent)
+    dex_url = f"https://dexscreener.com/{chain}/{address}"
+    buttons.append([InlineKeyboardButton(text="📊 View Chart (DexScreener)", url=dex_url)])
+    
+    # 2. Bouton d'achat (Selon la blockchain)
+    if chain == "solana":
+        buy_url = f"https://jup.ag/swap/SOL-{address}"
+        buttons.append([InlineKeyboardButton(text="🎯 Snipe on Jupiter", url=buy_url)])
+    elif chain in ("ethereum", "eth"):
+        buy_url = f"https://app.uniswap.org/#/swap?outputCurrency={address}"
+        buttons.append([InlineKeyboardButton(text="🎯 Buy on Uniswap", url=buy_url)])
+        
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+# =====================================================================

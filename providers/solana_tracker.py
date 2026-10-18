@@ -55,9 +55,8 @@ class SolanaTrackerProvider(BaseProvider):
             "name": token.get("name"),
             "symbol": token.get("symbol"),
             "price_usd": _float(token.get("price") or primary_pool.get("priceUsd")),
-            "liquidity_usd": _float(
-                primary_pool.get("liquidityUsd") or data.get("liquidity")
-            ),
+            # CORRECTION ICI : On ne prend QUE la liquidité du pool principal
+            "liquidity_usd": _float(primary_pool.get("liquidityUsd")),
             "volume_24h_usd": _float(
                 primary_pool.get("volume24h") or data.get("volume24h")
             ),

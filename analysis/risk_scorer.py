@@ -127,6 +127,7 @@ def score_token(data: dict[str, Any]) -> RiskResult:
         )
 
     score = 0
+    minimum_score = 0  # <--- AJOUT : Score plancher de sécurité
     reasons: list[dict[str, Any]] = []
     missing: list[str] = []
 
@@ -185,12 +186,15 @@ def score_token(data: dict[str, Any]) -> RiskResult:
         missing.append("top 10 holder %")
     elif top10 > 80:
         score += 25
+        minimum_score = max(minimum_score, 85) # <--- AJOUT
         _reason("reason_top10_control", pct=f"{top10:.2f}")
     elif top10 > 50:
         score += 18
+        minimum_score = max(minimum_score, 60) # <--- AJOUT
         _reason("reason_top10_control", pct=f"{top10:.2f}")
     elif top10 > 30:
         score += 8
+        minimum_score = max(minimum_score, 35) # <--- AJOUT
         _reason("reason_top10_control", pct=f"{top10:.2f}")
 
     # --- Champs EVM uniquement (contrat, honeypot, proxy, etc.) ---
@@ -223,6 +227,7 @@ def score_token(data: dict[str, Any]) -> RiskResult:
             missing.append("honeypot check")
         elif is_honeypot is True:
             score += 50
+            minimum_score = max(minimum_score, 100) # <--- AJOUT (Honeypot = Risque max)
             _reason("reason_honeypot_detected")
 
         if is_proxy is None:
@@ -237,11 +242,10 @@ def score_token(data: dict[str, Any]) -> RiskResult:
             missing.append("freeze authority")
         elif freeze_authority_active is True:
             score += 20
+            minimum_score = max(minimum_score, 50) # <--- AJOUT
             _reason("reason_freeze_authority")
 
     # --- Buy/sell tax ---
-    # Sur Solana, l'API SolanaTracker ne fournit pas cette donnée de manière
-    # fiable → on n'affiche PAS "Unknown: buy/sell tax" pour éviter du bruit.
     if not is_solana:
         if buy_tax is None and sell_tax is None:
             missing.append("buy/sell tax")
@@ -279,7 +283,6 @@ def score_token(data: dict[str, Any]) -> RiskResult:
     holder_known = top10 is not None
 
     if is_solana:
-        # Sur Solana, la seule donnée de "security" est freeze_authority_active.
         security_known = freeze_authority_active is not None
     else:
         security_known = any(
@@ -316,6 +319,8 @@ def score_token(data: dict[str, Any]) -> RiskResult:
     if score == 0:
         reasons.insert(0, {"key": "reason_no_risk_flags", "params": {}})
 
+    # --- Application du Score Plancher ---
+    score = max(score, minimum_score) # <--- AJOUT : On applique le score minimum
     score = max(0, min(score, 100))
     band, emoji = _band(score)
 

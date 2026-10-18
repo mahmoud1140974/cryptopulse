@@ -76,16 +76,6 @@ class RadarBot:
         """Scanne les nouveaux pools, filtre, poste."""
         logger.info("Radar: scan started")
 
-        # --- TEST TEMPORAIRE DU CANAL TELEGRAM ---
-        try:
-            await self.bot.send_message(
-                self.channel_id, 
-                "🤖 Test : Le Radar est maintenant connecté et fonctionnel !"
-            )
-        except Exception as e:
-            logger.error("IMPOSSIBLE D'ENVOYER DANS LE CANAL : %s", e)
-        # -----------------------------------------
-
         try:
             pools = await self.scanner.fetch_all_sources(limit_per_source=25)
         except Exception as exc:

@@ -13,8 +13,8 @@ MIN_HOLDERS = 100
 MAX_TOP10_PCT = 60
 MAX_RISK_SCORE = 40
 
-# --- Filtre MARKET CAP (on baisse à 0 pour tout accepter temporairement) ---
-MIN_MCAP_USD = 0  
+# --- Filtre MARKET CAP ---
+MIN_MCAP_USD = 5_000   # On exige 5k$ minimum
 MAX_MCAP_USD = 200_000
 
 # --- Filtres ANTI-PUMP ---
@@ -22,12 +22,14 @@ MAX_PRICE_CHANGE_H1 = 50.0
 MAX_PRICE_CHANGE_H6 = 100.0
 MAX_PRICE_CHANGE_H24 = 200.0
 
+# --- Filtre Spécial Solana / Pump.fun ---
+SOLANA_MIN_AGE_HOURS = 0.25  # On exige 15 minutes d'âge minimum sur Solana
+
 
 def calculate_age_hours(pair_created_at_ms: int | None) -> float | None:
     if not pair_created_at_ms:
         return None
     try:
-        # Si le timestamp est en secondes au lieu de millisecondes, on le convertit
         if pair_created_at_ms < 10_000_000_000:
             pair_created_at_ms = pair_created_at_ms * 1000
         return max((time.time() * 1000 - pair_created_at_ms) / 3_600_000, 0)
@@ -36,9 +38,6 @@ def calculate_age_hours(pair_created_at_ms: int | None) -> float | None:
 
 
 def apply_filters(analysis: dict[str, Any]) -> tuple[bool, str]:
-    """
-    Returns (passed: bool, reason: str).
-    """
     liquidity = analysis.get("liquidity_usd") or 0
     mcap = analysis.get("market_cap_usd")
     holders = analysis.get("holder_count") or 0
@@ -58,51 +57,43 @@ def apply_filters(analysis: dict[str, Any]) -> tuple[bool, str]:
     if change_h24 is not None and change_h24 > MAX_PRICE_CHANGE_H24:
         return False, f"already pumped +{change_h24:.0f}% in 24h"
 
-    # =====================================================================
-    # --- RÈGLE SPÉCIALE PUMP.FUN / SOLANA (MODE TEST ULTRA-PERMISSIF) ---
-    # =====================================================================
+    # --- RÈGLE SPÉCIALE SOLANA (Stricte) ---
     if analysis.get("chain") == "solana" or analysis.get("source") == "pumpfun":
-        # On ignore le market cap s'il est manquant ou à 0
-        if mcap is not None and mcap > MAX_MCAP_USD:
-            return False, f"mcap ${mcap:.0f} > ${MAX_MCAP_USD} (already pumped)"
+        # 1. Vérification Market Cap (Si inconnu, on rejette)
+        if mcap is None:
+            return False, "mcap unknown"
+        if mcap > MAX_MCAP_USD:
+            return False, f"mcap too high (${mcap:.0f})"
+        if mcap < MIN_MCAP_USD:
+            return False, f"mcap too low (${mcap:.0f})"
         
-        # On ignore complètement l'âge pour le moment 
-        # (on laisse passer même si le token a 5 minutes)
-        
+        # 2. Vérification Âge (Si inconnu, on rejette)
+        if age_hours is None:
+            return False, "age unknown"
+        if age_hours < SOLANA_MIN_AGE_HOURS:
+            return False, f"too young ({age_hours * 60:.0f} min)"
+            
         return True, ""
-    # =====================================================================
-    # --- FIN RÈGLE SPÉCIALE ---
-    # =====================================================================
 
-    # --- Filtres EVM (inchangés) ---
+    # --- Filtres EVM ---
     if mcap is None:
         return False, "market cap unknown"
-    if mcap < MIN_LIQUIDITY_USD: # Juste pour éviter les tokens à 0$
+    if mcap < MIN_MCAP_USD:
         return False, "mcap too low"
     if mcap > MAX_MCAP_USD:
-        return False, f"mcap ${mcap:.0f} > ${MAX_MCAP_USD} (already pumped)"
-
+        return False, "mcap too high"
     if liquidity < MIN_LIQUIDITY_USD:
-        return False, f"liquidity ${liquidity:.0f} < ${MIN_LIQUIDITY_USD}"
-
-    if age_hours is None:
-        return False, "age unknown"
-    if age_hours < MIN_AGE_HOURS:
-        return False, f"too young ({age_hours:.1f}h)"
+        return False, "low liquidity"
+    if age_hours is None or age_hours < MIN_AGE_HOURS:
+        return False, "too young"
     if age_hours > MAX_AGE_HOURS:
-        return False, f"too old ({age_hours:.1f}h)"
-
+        return False, "too old"
     if holders < MIN_HOLDERS:
-        return False, f"holders {holders} < {MIN_HOLDERS}"
-
+        return False, "not enough holders"
     if top10 is not None and top10 > MAX_TOP10_PCT:
-        return False, f"top10 {top10:.1f}% > {MAX_TOP10_PCT}%"
-
-    if risk is None:
-        return False, "no risk score"
-    if risk > MAX_RISK_SCORE:
-        return False, f"risk {risk} > {MAX_RISK_SCORE}"
-
+        return False, "top10 too high"
+    if risk is not None and risk > MAX_RISK_SCORE:
+        return False, "risk too high"
     if analysis.get("is_honeypot") is True:
         return False, "honeypot detected"
 
@@ -110,34 +101,19 @@ def apply_filters(analysis: dict[str, Any]) -> tuple[bool, str]:
 
 
 def calculate_signal(analysis: dict[str, Any]) -> str:
-    """Returns 'BUY', 'WATCH', or 'AVOID'."""
-    
     if analysis.get("chain") == "solana" or analysis.get("source") == "pumpfun":
-        return "WATCH" # On met tout en WATCH pour le test
+        return "WATCH" 
 
-    # --- LOGIQUE EVM ORIGINALE ---
     risk = (analysis.get("risk") or {}).get("score") or 100
     liquidity = analysis.get("liquidity_usd") or 0
     mcap = analysis.get("market_cap_usd") or 0
     top10 = analysis.get("top10_holder_pct")
     change_h1 = analysis.get("price_change_h1") or 0
 
-    if risk > 55:
-        return "AVOID"
-    if analysis.get("is_honeypot") is True:
-        return "AVOID"
-    if top10 is not None and top10 > 70:
-        return "AVOID"
-    if change_h1 > 50:
+    if risk > 55 or analysis.get("is_honeypot") or (top10 and top10 > 70) or change_h1 > 50:
         return "AVOID"
 
-    if (
-        risk <= 25
-        and liquidity >= 50_000
-        and mcap <= 120_000
-        and (top10 is None or top10 < 40)
-        and change_h1 < 20
-    ):
+    if risk <= 25 and liquidity >= 50_000 and mcap <= 120_000 and (top10 is None or top10 < 40) and change_h1 < 20:
         return "BUY"
 
     return "WATCH"

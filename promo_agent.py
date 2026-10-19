@@ -5,6 +5,7 @@ import random
 
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from tweetkit_x import TweetKit
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +15,11 @@ class PromoAgent:
         self.discord_webhook = os.getenv("DISCORD_WEBHOOK_URL")
         self.telegram_token = os.getenv("RADAR_BOT_TOKEN")
         self.telegram_channel = os.getenv("RADAR_CHANNEL_ID")
+        
+        # ✅ MODIFICATION ICI : On récupère les deux variables séparément
+        self.twitter_auth = os.getenv("TWITTER_AUTH_TOKEN")
+        self.twitter_ct0 = os.getenv("TWITTER_CT0")
+        
         self.scheduler = AsyncIOScheduler()
         
         self.topics = [
@@ -52,8 +58,8 @@ class PromoAgent:
             "model": "openai/gpt-oss-120b",
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7,
-            "max_tokens": 2048,  # ✅ Augmenté pour laisser de la place au raisonnement
-            "reasoning_effort": "low"  # ✅ Limite le raisonnement interne
+            "max_tokens": 2048,
+            "reasoning_effort": "low"
         }
 
         try:
@@ -63,17 +69,12 @@ class PromoAgent:
                     logger.error(f"PromoAgent Groq error (Code {response.status_code}): {response.text}")
                     return None
                 data = response.json()
-                
-                # ✅ Vérification du finish_reason pour diagnostiquer
                 choice = data.get("choices", [{}])[0]
-                finish_reason = choice.get("finish_reason", "unknown")
                 message_content = choice.get("message", {}).get("content", "")
                 
                 if not message_content or not message_content.strip():
-                    logger.error(f"PromoAgent: Réponse vide de Groq (finish_reason: {finish_reason}). "
-                                 f"Réponse brute: {data}")
+                    logger.error(f"PromoAgent: Réponse vide de Groq.")
                     return None
-                
                 return message_content.strip()
         except Exception as exc:
             logger.error(f"PromoAgent network error: {str(exc)}")
@@ -101,6 +102,28 @@ class PromoAgent:
         except Exception as exc:
             logger.error(f"PromoAgent Telegram error: {str(exc)}")
 
+    async def send_twitter(self, text):
+        if not self.twitter_auth or not self.twitter_ct0:
+            logger.warning("PromoAgent: Variables Twitter manquantes (TWITTER_AUTH_TOKEN ou TWITTER_CT0).")
+            return
+        
+        # ✅ MODIFICATION ICI : Le bot assemble lui-même la chaîne de cookies
+        cookie_string = f"auth_token={self.twitter_auth}; ct0={self.twitter_ct0}"
+        
+        try:
+            def post_tweet():
+                tk = TweetKit(cookie=cookie_string)
+                return tk.post(text)
+            
+            result = await asyncio.to_thread(post_tweet)
+            
+            if result.get("ok"):
+                logger.info(f"PromoAgent: Sent to Twitter (ID: {result.get('id')}).")
+            else:
+                logger.error(f"PromoAgent Twitter error: {result.get('error')}")
+        except Exception as exc:
+            logger.error(f"PromoAgent Twitter exception: {str(exc)}")
+
     async def run_cycle(self):
         logger.info("PromoAgent: Generating post...")
         text = await self.generate_post()
@@ -108,13 +131,14 @@ class PromoAgent:
             logger.info(f"PromoAgent generated: {text[:60]}...")
             await self.send_discord(text)
             await self.send_telegram(text)
+            await self.send_twitter(text)
         else:
             logger.warning("PromoAgent: No text generated, skipping sending.")
 
     def start_scheduler(self):
         if self.scheduler.running:
             return
-        self.scheduler.add_job(self.run_cycle, "interval", minutes=60, id="promo_agent")
+        self.scheduler.add_job(self.run_cycle, "interval", minutes=30, id="promo_agent")
         self.scheduler.start()
         asyncio.create_task(self.run_cycle())
 

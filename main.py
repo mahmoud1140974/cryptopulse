@@ -1,134 +1,166 @@
-"""Promo Agent — Uses Gemini AI to generate high-converting posts and sends them to Discord & Telegram."""
+"""CryptoPulse application entrypoint."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
-import random
-from datetime import datetime
 
-import httpx
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from aiohttp import web
+from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+
+from alerts.alert_engine import AlertEngine
+from alerts.scheduler import AlertScheduler
+from analysis.token_analyzer import TokenAnalyzer
+from bot.handlers import get_routers
+from bot.middlewares import RateLimitMiddleware, RateLimiter
+from config import Settings
+from database.models import Database
+from providers.coingecko import CoinGeckoProvider
+
+# --- SÉCURISATION DE L'IMPORT ---
+try:
+    from promo_agent import PromoAgent
+except Exception as e:
+    PromoAgent = None
+    logging.error(f"Impossible de charger PromoAgent : {e}")
+# --------------------------------
 
 logger = logging.getLogger(__name__)
 
-class PromoAgent:
-    def __init__(self):
-        self.gemini_key = os.getenv("GEMINI_API_KEY")
-        self.discord_webhook = os.getenv("DISCORD_WEBHOOK_URL")
-        # On réutilise les accès de ton bot Radar pour Telegram
-        self.telegram_token = os.getenv("RADAR_BOT_TOKEN")
-        self.telegram_channel = os.getenv("RADAR_CHANNEL_ID")
-        self.scheduler = AsyncIOScheduler()
-        
-        # Sujets conçus pour susciter la curiosité, la peur de rater (FOMO) ou l'éducation
-        self.topics = [
-            "The silent killers of memecoin portfolios: Honeypots. Explain how to avoid them.",
-            "Why you should NEVER buy a token without checking if the Liquidity is locked.",
-            "The 'Top 10 Holders' trick: How whales dump on retail traders and how to spot it.",
-            "Freeze Authority on Solana: The hidden switch that can lock your tokens forever.",
-            "Stop trusting the hype. How to instantly verify if a contract is safe in 3 seconds.",
-            "A step-by-step mini-guide on how to scan a token before aping in.",
-            "Why 90% of new memecoins fail, and how to find the 10% that survive.",
-            "The anatomy of a Rug Pull: What are the warning signs?",
-            "Don't get left holding the bag. Check the risk score before you buy.",
-            "The easiest way to check a token's security without reading smart contracts."
-        ]
 
-    async def generate_post(self) -> str | None:
-        """Demande à Gemini de rédiger un post de promo ultra-engageant."""
-        if not self.gemini_key:
-            logger.error("PromoAgent: GEMINI_API_KEY missing.")
-            return None
+async def create_app_components(settings: Settings):
+    db = Database(settings)
+    await db.init_schema()
+    analyzer = TokenAnalyzer(settings)
+    bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    dp = Dispatcher(storage=MemoryStorage())
 
-        topic = random.choice(self.topics)
-        
-        # PROMPT AVANCÉ : On donne une personnalité, une structure et des contraintes à l'IA
-        prompt = (
-            "You are an elite crypto security analyst and a master copywriter. "
-            "Your goal is to write a highly engaging, scroll-stopping Telegram/Discord post that drives crypto traders to use our free bot.\n\n"
-            f"TOPIC: {topic}\n\n"
-            "STRUCTURE TO FOLLOW:\n"
-            "1. HOOK: Start with a strong, controversial statement, a shocking statistic, or a direct question about losing money.\n"
-            "2. VALUE: Explain how CryptoPulse solves this problem instantly (mention features like risk score, liquidity check, or holder concentration).\n"
-            "3. CALL TO ACTION (CTA): Tell them exactly what to do next to save their portfolio.\n\n"
-            "RULES:\n"
-            "- Max 450 characters.\n"
-            "- Use 3 to 4 relevant emojis (🚀, 🛡️, 🚨, 🐋, 📊).\n"
-            "- Do not use hashtags.\n"
-            "- Sound like an authoritative human expert, not a robot.\n"
-            "- MUST end with: 'Try it free now 👉 @CryptoPulse113_bot'"
+    dp["settings"] = settings
+    dp["db"] = db
+    dp["analyzer"] = analyzer
+    dp["coingecko"] = CoinGeckoProvider(settings.coingecko_api_key)
+
+    limiter = RateLimiter(limit=5, window_seconds=10)
+    dp.message.middleware(RateLimitMiddleware(limiter))
+    dp.callback_query.middleware(RateLimitMiddleware(limiter))
+
+    for router in get_routers():
+        dp.include_router(router)
+
+    alert_engine = AlertEngine(db, analyzer, bot=bot)
+    scheduler = AlertScheduler(settings, alert_engine, db=db)
+    return bot, dp, db, scheduler, analyzer
+
+
+async def health_ok(request: web.Request) -> web.Response:
+    return web.Response(text="OK", status=200)
+
+
+def create_http_app(settings: Settings, bot: Bot, dp: Dispatcher) -> web.Application:
+    app = web.Application()
+    app.router.add_get("/", health_ok)
+    app.router.add_get("/health", health_ok)
+
+    if settings.bot_mode == "webhook":
+        SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path="/webhook")
+        setup_application(app, dp, bot=bot)
+
+    return app
+
+
+async def start_health_server(settings: Settings, bot: Bot, dp: Dispatcher) -> None:
+    app = create_http_app(settings, bot, dp)
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    port = int(os.environ.get("PORT", settings.port or 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info("Health server listening on 0.0.0.0:%s", port)
+
+    await asyncio.Event().wait()
+
+
+async def run_telegram_bot(settings: Settings, bot: Bot, dp: Dispatcher) -> None:
+    if settings.bot_mode == "webhook":
+        webhook_url = settings.webhook_url.rstrip("/") + "/webhook"
+        await bot.set_webhook(webhook_url, drop_pending_updates=True)
+        logger.info("Telegram webhook configured: %s", webhook_url)
+        await asyncio.Event().wait()
+    else:
+        await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Telegram polling started")
+        await dp.start_polling(bot)
+
+
+async def start_radar(settings: Settings, analyzer: TokenAnalyzer) -> None:
+    if not settings.radar_configured:
+        logger.info("Radar: not configured, skipping (RADAR_BOT_TOKEN / RADAR_CHANNEL_ID missing)")
+        return
+
+    try:
+        from radar.bot import RadarBot
+    except Exception as exc:
+        logger.error("Radar: import failed: %s", exc)
+        return
+
+    try:
+        radar = RadarBot(
+            settings=settings,
+            analyzer=analyzer,
+            bot_token=settings.radar_bot_token,
+            channel_id=settings.radar_channel_id,
         )
+        radar.start_scheduler()
+        logger.info("Radar: started successfully (channel=%s)", settings.radar_channel_id)
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.gemini_key}"
-        payload = {"contents": [{"parts": [{"text": prompt}]}]}
-
+        await asyncio.sleep(30)
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
-                response = await client.post(url, json=payload)
-                response.raise_for_status()
-                data = response.json()
-                text = data["candidates"][0]["content"]["parts"][0]["text"]
-                return text.strip()
+            await radar.scan_and_post()
         except Exception as exc:
-            logger.error("PromoAgent: Gemini API error: %s", exc)
-            return None
+            logger.error("Radar: first scan failed: %s", exc)
 
-    async def send_discord(self, text: str) -> None:
-        """Envoie le post sur Discord via le Webhook."""
-        if not self.discord_webhook:
-            logger.warning("PromoAgent: No Discord webhook configured.")
-            return
+        await asyncio.Event().wait()
+    except Exception as exc:
+        logger.error("Radar: startup failed: %s", exc)
+
+
+async def main() -> None:
+    settings = Settings.from_env()
+    logging.basicConfig(level=getattr(logging, settings.log_level, logging.INFO))
+    settings.require_bot_token()
+
+    bot, dp, db, scheduler, analyzer = await create_app_components(settings)
+    scheduler.start()
+
+    # --- DÉMARRAGE SÉCURISÉ DE L'AGENT ---
+    promo_agent = None
+    if PromoAgent:
         try:
-            async with httpx.AsyncClient() as client:
-                await client.post(self.discord_webhook, json={"content": text})
-                logger.info("PromoAgent: Post sent to Discord.")
-        except Exception as exc:
-            logger.error("PromoAgent: Discord send failed: %s", exc)
+            promo_agent = PromoAgent()
+            promo_agent.start_scheduler()
+            logger.info("PromoAgent: started successfully.")
+        except Exception as e:
+            logger.error(f"PromoAgent: failed to start: {e}")
+    # -------------------------------------
 
-    async def send_telegram(self, text: str) -> None:
-        """Envoie le post sur Telegram via le bot Radar."""
-        if not self.telegram_token or not self.telegram_channel:
-            logger.warning("PromoAgent: Telegram not configured.")
-            return
-        url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
-        payload = {"chat_id": self.telegram_channel, "text": text, "disable_web_page_preview": True}
-        try:
-            async with httpx.AsyncClient() as client:
-                await client.post(url, json=payload)
-                logger.info("PromoAgent: Post sent to Telegram.")
-        except Exception as exc:
-            logger.error("PromoAgent: Telegram send failed: %s", exc)
-
-    async def run_cycle(self):
-        """Génère un post et l'envoie sur toutes les plateformes."""
-        logger.info("PromoAgent: Starting promotion cycle...")
-        text = await self.generate_post()
-        if not text:
-            return
-
-        await self.send_discord(text)
-        await self.send_telegram(text)
-        logger.info("PromoAgent: Cycle complete.")
-
-    def start_scheduler(self):
-        """Lance la promotion automatique toutes les 1 heure."""
-        if self.scheduler.running:
-            return
-        
-        self.scheduler.add_job(
-            self.run_cycle,
-            "interval",
-            minutes=60, 
-            id="promo_agent",
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
+    try:
+        await asyncio.gather(
+            start_health_server(settings, bot, dp),
+            run_telegram_bot(settings, bot, dp),
+            start_radar(settings, analyzer),
         )
-        self.scheduler.start()
-        logger.info("PromoAgent: Scheduler started (runs every 1 hour).")
+    finally:
+        scheduler.shutdown()
+        if promo_agent:
+            await promo_agent.close()
+        await bot.session.close()
 
-    async def close(self):
-        if self.scheduler.running:
-            self.scheduler.shutdown(wait=False)
+
+if __name__ == "__main__":
+    asyncio.run(main())

@@ -49,20 +49,32 @@ class PromoAgent:
             "Content-Type": "application/json"
         }
         payload = {
-            "model": "openai/gpt-oss-120b", # ✅ LE BON MODÈLE (remplaçant officiel de llama-3.3)
+            "model": "openai/gpt-oss-120b",
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7,
-            "max_tokens": 250
+            "max_tokens": 2048,  # ✅ Augmenté pour laisser de la place au raisonnement
+            "reasoning_effort": "low"  # ✅ Limite le raisonnement interne
         }
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(url, headers=headers, json=payload)
                 if response.status_code != 200:
                     logger.error(f"PromoAgent Groq error (Code {response.status_code}): {response.text}")
                     return None
                 data = response.json()
-                return data["choices"][0]["message"]["content"].strip()
+                
+                # ✅ Vérification du finish_reason pour diagnostiquer
+                choice = data.get("choices", [{}])[0]
+                finish_reason = choice.get("finish_reason", "unknown")
+                message_content = choice.get("message", {}).get("content", "")
+                
+                if not message_content or not message_content.strip():
+                    logger.error(f"PromoAgent: Réponse vide de Groq (finish_reason: {finish_reason}). "
+                                 f"Réponse brute: {data}")
+                    return None
+                
+                return message_content.strip()
         except Exception as exc:
             logger.error(f"PromoAgent network error: {str(exc)}")
             return None

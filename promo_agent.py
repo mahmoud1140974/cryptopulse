@@ -128,6 +128,12 @@ class PromoAgent:
         )
         self.scheduler.start()
         logger.info("PromoAgent: Scheduler started (runs every 1 hour).")
+        
+        # --- LANCEMENT IMMÉDIAT ---
+        # On crée une tâche asynchrone pour ne pas bloquer le démarrage du bot
+        asyncio.create_task(self.run_cycle())
+        logger.info("PromoAgent: Triggered an immediate test post at startup.")
+        # ---------------------------
 
     async def close(self):
         if self.scheduler.running:

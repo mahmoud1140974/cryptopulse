@@ -43,8 +43,8 @@ class PromoAgent:
             "End with: 'Try it free now -> @CryptoPulse113_bot'"
         )
 
-        # URL officielle avec le modèle stable actuel
-        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
+        # ✅ SOLUTION FIABLE : Alias 'gemini-flash-latest' sur l'endpoint stable 'v1'
+        url = "https://generativelanguage.googleapis.com/v1/models/gemini-flash-latest:generateContent"
         
         headers = {
             "Content-Type": "application/json",
@@ -83,7 +83,7 @@ class PromoAgent:
     async def send_telegram(self, text):
         if not self.telegram_token or not self.telegram_channel:
             return
-        url = "https://api.telegram.org/bot" + self.telegram_token + "/sendMessage"
+        url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
         payload = {"chat_id": self.telegram_channel, "text": text, "disable_web_page_preview": True}
         try:
             async with httpx.AsyncClient() as client:
@@ -96,7 +96,7 @@ class PromoAgent:
         logger.info("PromoAgent: Generating post...")
         text = await self.generate_post()
         if text:
-            logger.info(f"PromoAgent generated: {text}")
+            logger.info(f"PromoAgent generated: {text[:60]}...")
             await self.send_discord(text)
             await self.send_telegram(text)
         else:

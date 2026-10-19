@@ -43,7 +43,7 @@ class PromoAgent:
             "End with: 'Try it free now -> @CryptoPulse113_bot'"
         )
 
-        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
         headers = {
             "Content-Type": "application/json",
             "x-goog-api-key": self.gemini_key

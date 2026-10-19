@@ -4,14 +4,10 @@ from __future__ import annotations
 
 import html
 from typing import Any
-
-# --- AJOUT DES IMPORTS POUR LES BOUTONS TELEGRAM ---
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-# ---------------------------------------------------
 
 def _escape(text: Any) -> str:
     return html.escape(str(text or ""), quote=False)
-
 
 def _money(val: Any) -> str:
     if val is None:
@@ -28,7 +24,6 @@ def _money(val: Any) -> str:
         return f"${v:,.2f}"
     return f"${v:.8f}".rstrip("0").rstrip(".")
 
-
 def _pct(val: Any) -> str:
     if val is None:
         return "N/A"
@@ -37,55 +32,31 @@ def _pct(val: Any) -> str:
     except (TypeError, ValueError):
         return "N/A"
 
-
 def _age(pair_created_at_ms: int | None) -> str:
     import time
     if not pair_created_at_ms:
         return "?"
-    hours = max((time.time() * 1000 - pair_created_at_ms) / 3_600_000, 0)
-    if hours < 1:
-        return f"{int(hours * 60)}min"
-    return f"{hours:.1f}h"
-
-
-def _short(address: str | None) -> str:
-    if not address or len(address) < 12:
-        return address or ""
-    return f"{address[:6]}…{address[-4:]}"
-
+    try:
+        if pair_created_at_ms < 10_000_000_000:
+            pair_created_at_ms = pair_created_at_ms * 1000
+        hours = max((time.time() * 1000 - pair_created_at_ms) / 3_600_000, 0)
+        if hours < 1:
+            return f"{int(hours * 60)}min"
+        return f"{hours:.1f}h"
+    except Exception:
+        return "?"
 
 def _chain_label(chain: str | None) -> str:
-    mapping = {
-        "ethereum": "Ethereum",
-        "solana": "Solana",
-        "bsc": "BSC",
-        "base": "Base",
-        "polygon": "Polygon",
-        "arbitrum": "Arbitrum",
-    }
+    mapping = {"ethereum": "Ethereum", "solana": "Solana", "bsc": "BSC", "base": "Base"}
     return mapping.get(str(chain or "").lower(), str(chain or "?").capitalize())
 
-
 def _signal_emoji(signal: str) -> str:
-    return {
-        "BUY": "🟢",
-        "WATCH": "🟡",
-        "AVOID": "🔴",
-    }.get(signal, "⚪")
+    return {"BUY": "🟢", "WATCH": "🟡", "AVOID": "🔴"}.get(signal, "⚪")
 
-
-def format_new_token_post(
-    analysis: dict[str, Any],
-    signal: str,
-    bot_username: str = "CryptoPulse113_bot",
-) -> str:
-    """
-    Format du post principal 'nouveau memecoin détecté'.
-    """
+def format_new_token_post(analysis: dict[str, Any], signal: str, bot_username: str = "CryptoPulse113_bot") -> str:
     symbol = _escape(analysis.get("symbol") or "UNKNOWN")
     address = analysis.get("address") or ""
     chain = _chain_label(analysis.get("chain"))
-
     price = _money(analysis.get("price_usd"))
     liquidity = _money(analysis.get("liquidity_usd"))
     volume = _money(analysis.get("volume_24h_usd"))
@@ -93,52 +64,39 @@ def format_new_token_post(
     holders = analysis.get("holder_count")
     top10 = analysis.get("top10_holder_pct")
     risk = (analysis.get("risk") or {}).get("score")
-
+    reply_count = analysis.get("reply_count", 0)
     age = _age(analysis.get("pair_created_at"))
-
-    risk_emoji = "🟢" if (risk or 100) <= 20 else "🟡" if (risk or 100) <= 45 else "🟠"
     signal_emoji = _signal_emoji(signal)
 
-    lines = []
-    lines.append(f"⚡ <b>NEW</b> — <b>${symbol}</b>")
-    lines.append(f"⛓ {chain} • ⏱ {age} old")
+    lines = [
+        f"⚡ <b>NEW</b> — <b>${symbol}</b>",
+        f"⛓ {chain} • ⏱ {age} old",
+        "",
+        f"💵 <b>Price:</b> {price}"
+    ]
+    if liquidity != "N/A": lines.append(f"💧 <b>Liquidity:</b> {liquidity}")
+    if volume != "N/A": lines.append(f"📈 <b>Volume 24h:</b> {volume}")
+    lines.append(f"🏦 <b>Market Cap:</b> {mcap}")
+    if reply_count > 0: lines.append(f"💬 <b>Hype:</b> {reply_count} comments")
+    if holders is not None: lines.append(f"👥 <b>Holders:</b> {_escape(holders)}")
+    if top10 is not None: lines.append(f"👑 <b>Top 10:</b> {_pct(top10)}")
+    
     lines.append("")
-
-    lines.append(f"💵 <b>Price:</b> {price}")
-    lines.append(f"💧 <b>Liquidity:</b> {liquidity}")
-    if volume != "N/A":
-        lines.append(f"📈 <b>Volume 24h:</b> {volume}")
-    if mcap != "N/A":
-        lines.append(f"🏦 <b>Market Cap:</b> {mcap}")
-    if holders is not None:
-        lines.append(f"👥 <b>Holders:</b> {_escape(holders)}")
-    if top10 is not None:
-        lines.append(f"👑 <b>Top 10:</b> {_pct(top10)}")
-    lines.append("")
-
-    lines.append(f"📊 <b>Risk:</b> {risk_emoji} {risk}/100")
-    lines.append(f"🎯 <b>Signal:</b> {signal_emoji} <b>{signal}</b>")
-    lines.append("")
-
-    lines.append(f"🔢 <code>{_escape(address)}</code>")
-    lines.append("")
-    lines.append(f"🔍 Scan any token free → @{_escape(bot_username)}")
-    lines.append("")
-    lines.append("⚠️ <i>Not financial advice. DYOR.</i>")
-
+    if risk is not None:
+        risk_emoji = "🟢" if risk <= 20 else "🟡" if risk <= 45 else "🟠"
+        lines.append(f"📊 <b>Risk:</b> {risk_emoji} {risk}/100")
+    lines.extend([
+        f"🎯 <b>Signal:</b> {signal_emoji} <b>{signal}</b>",
+        "",
+        f"🔢 <code>{_escape(address)}</code>",
+        "",
+        f"🔍 Scan any token free → @{_escape(bot_username)}",
+        "",
+        "⚠️ <i>Not financial advice. DYOR.</i>"
+    ])
     return "\n".join(lines)
 
-
-def format_update_post(
-    token: dict[str, Any],
-    current: dict[str, Any],
-    hours: int,
-) -> str | None:
-    """
-    Format du post 'update' — compare le prix/liquidité d'origine avec
-    la valeur actuelle.
-    Renvoie None si on n'a pas les données nécessaires.
-    """
+def format_update_post(token: dict[str, Any], current: dict[str, Any], hours: int) -> str | None:
     initial_price = token.get("initial_price")
     initial_liquidity = token.get("initial_liquidity")
     current_price = current.get("price_usd")
@@ -156,81 +114,90 @@ def format_update_post(
     symbol = _escape(token.get("symbol") or "UNKNOWN")
     signal = token.get("signal") or "?"
     signal_emoji = _signal_emoji(signal)
-
     arrow = "📈" if price_change >= 0 else "📉"
 
-    lines = []
-    lines.append(f"{arrow} <b>UPDATE</b> — <b>${symbol}</b> ({hours}h later)")
-    lines.append("")
-    lines.append(f"💵 <b>Price:</b> {_money(initial_price)} → {_money(current_price)}")
-    lines.append(f"   <b>{price_change:+.1f}%</b>")
+    lines = [
+        f"{arrow} <b>UPDATE</b> — <b>${symbol}</b> ({hours}h later)",
+        "",
+        f"💵 <b>Price:</b> {_money(initial_price)} → {_money(current_price)}",
+        f"   <b>{price_change:+.1f}%</b>"
+    ]
     if liq_change is not None:
         lines.append(f"💧 <b>Liquidity:</b> {_money(initial_liquidity)} → {_money(current_liquidity)}")
         lines.append(f"   <b>{liq_change:+.1f}%</b>")
     if current_holders:
         lines.append(f"👥 <b>Holders:</b> {_escape(current_holders)}")
-    lines.append("")
-    lines.append(f"🎯 Signal was: {signal_emoji} <b>{signal}</b>")
-    lines.append("")
-    lines.append("⚠️ <i>Not financial advice. DYOR.</i>")
-
+    lines.extend([
+        "",
+        f"🎯 Signal was: {signal_emoji} <b>{signal}</b>",
+        "",
+        "⚠️ <i>Not financial advice. DYOR.</i>"
+    ])
     return "\n".join(lines)
 
-
-def format_daily_recap(
-    tokens: list[dict[str, Any]],
-    stats: dict[str, int],
-    bot_username: str = "CryptoPulse113_bot",
-) -> str:
-    """Récap quotidien en fin de journée."""
+def format_pump_alert(token: dict[str, Any], current: dict[str, Any], multiplier: float) -> str | None:
+    initial_mcap = token.get("initial_market_cap") or token.get("market_cap_usd")
+    current_mcap = current.get("market_cap_usd")
+    
+    if not initial_mcap or not current_mcap:
+        return None
+        
+    symbol = _escape(token.get("symbol") or "UNKNOWN")
+    address = token.get("contract_address") or ""
+    
     lines = []
-    lines.append("🔥 <b>TOP MEMECOINS TODAY</b>")
-    lines.append("")
+    if multiplier >= 10:
+        lines.append(f"🚀🔥 <b>MASSIVE PUMP: x{multiplier:.0f} REACHED!</b> 🔥🚀")
+    elif multiplier >= 5:
+        lines.append(f"🚀 <b>PUMP ALERT: x{multiplier:.0f} REACHED!</b> 🚀")
+    else:
+        lines.append(f"📈 <b>PUMP ALERT: x{multiplier:.0f} REACHED!</b> 📈")
+        
+    lines.extend([
+        f"<b>${symbol}</b> is exploding right now!",
+        "",
+        f"🏦 <b>Initial Market Cap:</b> {_money(initial_mcap)}",
+        f"🚀 <b>Current Market Cap:</b> {_money(current_mcap)}",
+        f"📊 <b>Performance:</b> +{(multiplier - 1) * 100:.0f}%",
+        "",
+        f"🔢 <code>{_escape(address)}</code>",
+        "",
+        "This token was called earlier by CryptoPulse Radar. Did you catch it? 👀",
+        f"🔍 Scan any token free → @CryptoPulse113_bot",
+        "",
+        "⚠️ <i>Not financial advice. DYOR.</i>"
+    ])
+    return "\n".join(lines)
 
-    if not tokens:
-        lines.append("<i>No qualifying tokens today.</i>")
+def format_daily_recap(tokens: list[dict[str, Any]], stats: dict[str, int], bot_username: str = "CryptoPulse113_bot") -> str:
+    lines = ["🔥 <b>TOP MEMECOINS TODAY</b>", ""]
+    if not tokens: lines.append("<i>No qualifying tokens today.</i>")
     else:
         for i, t in enumerate(tokens[:5], start=1):
-            symbol = _escape(t.get("symbol") or "?")
-            signal = t.get("signal") or "?"
-            emoji = _signal_emoji(signal)
-            lines.append(f"{i}. {emoji} <b>${symbol}</b> — {signal}")
-
-    lines.append("")
-    lines.append("📊 <b>Today's stats</b>")
-    lines.append(f"• Scanned: <b>{stats.get('scanned', 0)}</b>")
-    lines.append(f"• Passed filters: <b>{stats.get('posted', 0)}</b>")
-    lines.append(f"• BUY signals: <b>{stats.get('buy', 0)}</b>")
-    lines.append("")
-    lines.append(f"🔍 Scan any token free → @{_escape(bot_username)}")
-    lines.append("")
-    lines.append("⚠️ <i>Not financial advice. DYOR.</i>")
-
+            lines.append(f"{i}. {_signal_emoji(t.get('signal'))} <b>${_escape(t.get('symbol'))}</b> — {t.get('signal')}")
+    lines.extend([
+        "", "📊 <b>Today's stats</b>",
+        f"• Scanned: <b>{stats.get('scanned', 0)}</b>",
+        f"• Passed filters: <b>{stats.get('posted', 0)}</b>",
+        f"• BUY signals: <b>{stats.get('buy', 0)}</b>",
+        "", f"🔍 Scan any token free → @{_escape(bot_username)}", "", "⚠️ <i>Not financial advice. DYOR.</i>"
+    ])
     return "\n".join(lines)
-
 
 def format_daily_stats(stats: dict[str, int], bot_username: str = "CryptoPulse113_bot") -> str:
-    """Stats du matin — bilan de la veille."""
-    lines = []
-    lines.append("📊 <b>RADAR STATS — YESTERDAY</b>")
-    lines.append("")
-    lines.append(f"🆕 Tokens scanned: <b>{stats.get('scanned', 0)}</b>")
-    lines.append(f"✅ Passed filters: <b>{stats.get('posted', 0)}</b>")
-    lines.append(f"🟢 BUY signals: <b>{stats.get('buy', 0)}</b>")
-    lines.append(f"🟡 WATCH signals: <b>{stats.get('watch', 0)}</b>")
-    lines.append(f"🔴 AVOID signals: <b>{stats.get('avoid', 0)}</b>")
-    lines.append("")
-    lines.append(f"🔍 Scan any token free → @{_escape(bot_username)}")
-    lines.append("")
-    lines.append("⚠️ <i>Not financial advice. DYOR.</i>")
-
+    lines = [
+        "📊 <b>RADAR STATS — YESTERDAY</b>", "",
+        f"🆕 Tokens scanned: <b>{stats.get('scanned', 0)}</b>",
+        f"✅ Passed filters: <b>{stats.get('posted', 0)}</b>",
+        f"🟢 BUY signals: <b>{stats.get('buy', 0)}</b>",
+        f"🟡 WATCH signals: <b>{stats.get('watch', 0)}</b>",
+        f"🔴 AVOID signals: <b>{stats.get('avoid', 0)}</b>",
+        "", f"🔍 Scan any token free → @{_escape(bot_username)}", "", "⚠️ <i>Not financial advice. DYOR.</i>"
+    ]
     return "\n".join(lines)
 
-
 def format_tip_of_the_day() -> str:
-    """Tip quotidien — éducatif."""
     import random
-
     tips = [
         "Liquidity under $20K + top 10 holders over 70% = 90% chance of rug. Skip it.",
         "Always check if ownership is renounced. Active owner = can change taxes anytime.",
@@ -243,28 +210,14 @@ def format_tip_of_the_day() -> str:
     ]
     return "🎓 <b>TIP OF THE DAY</b>\n\n" + random.choice(tips)
 
-
-# =====================================================================
-# --- FONCTION AJOUTÉE ICI POUR CORRIGER L'ERREUR ---
-# =====================================================================
 def build_sniper_keyboard(analysis: dict[str, Any]) -> InlineKeyboardMarkup:
-    """Crée les boutons d'action (Snipe / Chart) pour Telegram."""
     address = analysis.get("address")
     chain = str(analysis.get("chain") or "ethereum").lower()
-    
     buttons = []
-    
-    # 1. Bouton DexScreener (Toujours présent)
     dex_url = f"https://dexscreener.com/{chain}/{address}"
     buttons.append([InlineKeyboardButton(text="📊 View Chart (DexScreener)", url=dex_url)])
-    
-    # 2. Bouton d'achat (Selon la blockchain)
     if chain == "solana":
-        buy_url = f"https://jup.ag/swap/SOL-{address}"
-        buttons.append([InlineKeyboardButton(text="🎯 Snipe on Jupiter", url=buy_url)])
+        buttons.append([InlineKeyboardButton(text="🎯 Snipe on Jupiter", url=f"https://jup.ag/swap/SOL-{address}")])
     elif chain in ("ethereum", "eth"):
-        buy_url = f"https://app.uniswap.org/#/swap?outputCurrency={address}"
-        buttons.append([InlineKeyboardButton(text="🎯 Buy on Uniswap", url=buy_url)])
-        
+        buttons.append([InlineKeyboardButton(text="🎯 Buy on Uniswap", url=f"https://app.uniswap.org/#/swap?outputCurrency={address}")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
-# =====================================================================

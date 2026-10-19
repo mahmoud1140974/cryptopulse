@@ -5,7 +5,7 @@ import random
 
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from tweetkit_x import TweetKit
+from twikit import Client  # ✅ twifork s'importe comme twikit
 
 logger = logging.getLogger(__name__)
 
@@ -15,11 +15,8 @@ class PromoAgent:
         self.discord_webhook = os.getenv("DISCORD_WEBHOOK_URL")
         self.telegram_token = os.getenv("RADAR_BOT_TOKEN")
         self.telegram_channel = os.getenv("RADAR_CHANNEL_ID")
-        
-        # ✅ MODIFICATION ICI : On récupère les deux variables séparément
         self.twitter_auth = os.getenv("TWITTER_AUTH_TOKEN")
         self.twitter_ct0 = os.getenv("TWITTER_CT0")
-        
         self.scheduler = AsyncIOScheduler()
         
         self.topics = [
@@ -104,25 +101,22 @@ class PromoAgent:
 
     async def send_twitter(self, text):
         if not self.twitter_auth or not self.twitter_ct0:
-            logger.warning("PromoAgent: Variables Twitter manquantes (TWITTER_AUTH_TOKEN ou TWITTER_CT0).")
+            logger.warning("PromoAgent: Variables Twitter manquantes.")
             return
         
-        # ✅ MODIFICATION ICI : Le bot assemble lui-même la chaîne de cookies
-        cookie_string = f"auth_token={self.twitter_auth}; ct0={self.twitter_ct0}"
-        
         try:
-            def post_tweet():
-                tk = TweetKit(cookie=cookie_string)
-                return tk.post(text)
+            # ✅ Utilisation de twifork (Client twikit)
+            client = Client(language='en-US')
+            client.set_cookies({
+                'auth_token': self.twitter_auth,
+                'ct0': self.twitter_ct0
+            })
             
-            result = await asyncio.to_thread(post_tweet)
+            await client.create_tweet(text=text)
+            logger.info("PromoAgent: Sent to Twitter via twifork.")
             
-            if result.get("ok"):
-                logger.info(f"PromoAgent: Sent to Twitter (ID: {result.get('id')}).")
-            else:
-                logger.error(f"PromoAgent Twitter error: {result.get('error')}")
         except Exception as exc:
-            logger.error(f"PromoAgent Twitter exception: {str(exc)}")
+            logger.error(f"PromoAgent Twitter error: {str(exc)}")
 
     async def run_cycle(self):
         logger.info("PromoAgent: Generating post...")

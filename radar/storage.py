@@ -68,6 +68,8 @@ class RadarStorage:
             "holders": analysis.get("holder_count"),
             "initial_price": analysis.get("price_usd"),
             "initial_liquidity": analysis.get("liquidity_usd"),
+            "initial_market_cap": analysis.get("market_cap_usd"), # ✅ AJOUTÉ ICI
+            "last_alert_multiplier": 1.0, # ✅ AJOUTÉ ICI (par défaut à 1)
             "posted_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -100,15 +102,13 @@ class RadarStorage:
 
     async def list_for_update(self, hours_ago: float) -> list[dict[str, Any]]:
         """
-        Renvoie les tokens postés il y a environ X heures, dont l'update
-        n'a pas encore été envoyé.
+        Renvoie TOUS les tokens postés depuis X heures (ex: 48h).
         """
         if not self.supabase:
             return []
 
         now = datetime.now(timezone.utc)
-        window_start = (now - timedelta(hours=hours_ago + 0.5)).isoformat()
-        window_end = (now - timedelta(hours=hours_ago - 0.5)).isoformat()
+        window_start = (now - timedelta(hours=hours_ago)).isoformat()
 
         def run() -> list[dict[str, Any]]:
             try:
@@ -116,7 +116,6 @@ class RadarStorage:
                     self.supabase.table("radar_tokens")
                     .select("*")
                     .gte("posted_at", window_start)
-                    .lte("posted_at", window_end)
                     .execute()
                 )
                 return response.data or []
@@ -141,4 +140,20 @@ class RadarStorage:
                 self.supabase.table("radar_tokens").update(payload).eq("id", token_id).execute()
             except Exception as exc:
                 logger.warning("mark_update_sent failed: %s", exc)
+        await asyncio.to_thread(run)
+
+    # ✅ NOUVELLE FONCTION POUR LES PALIERS
+    async def update_last_multiplier(self, token_id: str, multiplier: float) -> None:
+        """Met à jour le dernier multiplicateur d'alerte envoyé (x2, x3, x10...)."""
+        if not self.supabase:
+            return
+
+        def run() -> None:
+            try:
+                self.supabase.table("radar_tokens").update(
+                    {"last_alert_multiplier": multiplier}
+                ).eq("id", token_id).execute()
+            except Exception as exc:
+                logger.warning("update_last_multiplier failed for %s: %s", token_id, exc)
+        
         await asyncio.to_thread(run)

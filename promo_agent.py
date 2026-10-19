@@ -43,12 +43,16 @@ class PromoAgent:
             "End with: 'Try it free now -> @CryptoPulse113_bot'"
         )
 
-        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + self.gemini_key
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": self.gemini_key
+        }
         payload = {"contents": [{"parts": [{"text": prompt}]}]}
 
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
-                response = await client.post(url, json=payload)
+                response = await client.post(url, headers=headers, json=payload)
                 if response.status_code != 200:
                     logger.error("PromoAgent Gemini error: " + response.text)
                     return None

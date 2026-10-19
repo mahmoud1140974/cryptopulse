@@ -2,8 +2,7 @@ import asyncio
 import logging
 import os
 import random
-
-import httpx
+import aiohttp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 logger = logging.getLogger(__name__)
@@ -43,7 +42,7 @@ class PromoAgent:
             "End with: 'Try it free now -> @CryptoPulse113_bot'"
         )
 
-        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
         headers = {
             "Content-Type": "application/json",
             "x-goog-api-key": self.gemini_key
@@ -51,45 +50,56 @@ class PromoAgent:
         payload = {"contents": [{"parts": [{"text": prompt}]}]}
 
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
-                response = await client.post(url, headers=headers, json=payload)
-                if response.status_code != 200:
-                    logger.error("PromoAgent Gemini error: " + response.text)
-                    return None
-                data = response.json()
-                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, json=payload, timeout=30) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(f"PromoAgent Gemini error (Code {response.status}): {error_text}")
+                        return None
+                    
+                    data = await response.json()
+                    return data["candidates"][0]["content"]["parts"][0]["text"].strip()
         except Exception as exc:
-            logger.error("PromoAgent network error: " + str(exc))
+            logger.error(f"PromoAgent network error: {repr(exc)}")
             return None
 
     async def send_discord(self, text):
         if not self.discord_webhook:
             return
         try:
-            async with httpx.AsyncClient() as client:
-                await client.post(self.discord_webhook, json={"content": text})
-                logger.info("PromoAgent: Sent to Discord.")
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.discord_webhook, json={"content": text}, timeout=10) as response:
+                    if response.status not in (200, 204):
+                        logger.error(f"PromoAgent Discord error: {await response.text()}")
+                    else:
+                        logger.info("PromoAgent: Sent to Discord.")
         except Exception as exc:
-            logger.error("PromoAgent Discord error: " + str(exc))
+            logger.error(f"PromoAgent Discord exception: {repr(exc)}")
 
     async def send_telegram(self, text):
         if not self.telegram_token or not self.telegram_channel:
             return
-        url = "https://api.telegram.org/bot" + self.telegram_token + "/sendMessage"
+        url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
         payload = {"chat_id": self.telegram_channel, "text": text, "disable_web_page_preview": True}
         try:
-            async with httpx.AsyncClient() as client:
-                await client.post(url, json=payload)
-                logger.info("PromoAgent: Sent to Telegram.")
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, timeout=10) as response:
+                    if response.status != 200:
+                        logger.error(f"PromoAgent Telegram error: {await response.text()}")
+                    else:
+                        logger.info("PromoAgent: Sent to Telegram.")
         except Exception as exc:
-            logger.error("PromoAgent Telegram error: " + str(exc))
+            logger.error(f"PromoAgent Telegram exception: {repr(exc)}")
 
     async def run_cycle(self):
         logger.info("PromoAgent: Generating post...")
         text = await self.generate_post()
         if text:
+            logger.info(f"PromoAgent generated: {text}")
             await self.send_discord(text)
             await self.send_telegram(text)
+        else:
+            logger.warning("PromoAgent: No text generated, skipping sending.")
 
     def start_scheduler(self):
         if self.scheduler.running:

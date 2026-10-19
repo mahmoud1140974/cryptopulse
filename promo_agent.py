@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 class PromoAgent:
     def __init__(self):
-        self.gemini_key = os.getenv("GEMINI_API_KEY")
+        self.groq_key = os.getenv("GROQ_API_KEY")
         self.discord_webhook = os.getenv("DISCORD_WEBHOOK_URL")
         self.telegram_token = os.getenv("RADAR_BOT_TOKEN")
         self.telegram_channel = os.getenv("RADAR_CHANNEL_ID")
@@ -29,8 +29,8 @@ class PromoAgent:
         ]
 
     async def generate_post(self):
-        if not self.gemini_key:
-            logger.error("PromoAgent: GEMINI_API_KEY missing.")
+        if not self.groq_key:
+            logger.error("PromoAgent: GROQ_API_KEY missing.")
             return None
 
         topic = random.choice(self.topics)
@@ -43,29 +43,26 @@ class PromoAgent:
             "End with: 'Try it free now -> @CryptoPulse113_bot'"
         )
 
-        # ✅ SOLUTION FIABLE : Alias 'gemini-flash-latest' sur l'endpoint stable 'v1'
-        url = "https://generativelanguage.googleapis.com/v1/models/gemini-flash-latest:generateContent"
-        
+        url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
-            "Content-Type": "application/json",
-            "x-goog-api-key": self.gemini_key
+            "Authorization": f"Bearer {self.groq_key}",
+            "Content-Type": "application/json"
         }
-        
         payload = {
-            "contents": [{"parts": [{"text": prompt}]}]
+            "model": "llama-3.3-70b-versatile",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.7,
+            "max_tokens": 250
         }
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(url, headers=headers, json=payload)
-                
                 if response.status_code != 200:
-                    logger.error(f"PromoAgent Gemini error (Code {response.status_code}): {response.text}")
+                    logger.error(f"PromoAgent Groq error (Code {response.status_code}): {response.text}")
                     return None
-                
                 data = response.json()
-                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                
+                return data["choices"][0]["message"]["content"].strip()
         except Exception as exc:
             logger.error(f"PromoAgent network error: {str(exc)}")
             return None

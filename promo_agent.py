@@ -37,14 +37,15 @@ class PromoAgent:
             return None
 
         topic = random.choice(self.topics)
-        # ✅ On réduit la limite à 200 caractères pour être sûr de ne pas dépasser
+        
+        # ✅ MODIFICATION ICI : On demande le lien complet à la place du @
         prompt = (
             "You are an elite crypto security analyst. "
             "Write a highly engaging, scroll-stopping Telegram/Discord post.\n"
             "TOPIC: " + topic + "\n"
             "STRUCTURE: 1. HOOK (shocking statement) 2. VALUE (how CryptoPulse solves it) 3. CTA.\n"
             "RULES: Max 200 characters. 3 emojis. No hashtags. "
-            "End with: 'Try it free now -> @CryptoPulse113_bot'"
+            "End with: 'Try it free now -> https://t.me/CryptoPulse113_bot'"
         )
 
         url = "https://api.groq.com/openai/v1/chat/completions"
@@ -106,7 +107,6 @@ class PromoAgent:
             return
         
         try:
-            # ✅ Sécurité : On coupe le texte à 270 caractères maximum pour X
             safe_text = text[:270] if len(text) > 270 else text
             
             client = Client(language='en-US')

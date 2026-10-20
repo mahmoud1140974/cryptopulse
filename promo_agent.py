@@ -13,132 +13,103 @@ class PromoAgent:
     def __init__(self):
         self.groq_key = os.getenv("GROQ_API_KEY")
         self.discord_webhook = os.getenv("DISCORD_WEBHOOK_URL")
-        self.telegram_token = os.getenv("RADAR_BOT_TOKEN")
-        self.telegram_channel = os.getenv("RADAR_CHANNEL_ID")
         self.twitter_auth = os.getenv("TWITTER_AUTH_TOKEN")
         self.twitter_ct0 = os.getenv("TWITTER_CT0")
         self.scheduler = AsyncIOScheduler()
         
-        self.topics = [
+        # 🎯 METS TON LIEN ICI (celui de ton canal)
+        self.bot_url = "https://t.me/CryptoPulse113_bot"
+        self.channel_url = "https://t.me/apexcryptolabs1"  # <--- MODIFIE CETTE LIGNE SI TU CRÉES UN NOUVEAU LIEN
+
+        self.topics_bot = [
             "The silent killers of memecoin portfolios: Honeypots.",
             "Why you should NEVER buy a token without checking if the Liquidity is locked.",
             "The Top 10 Holders trick: How whales dump on retail traders.",
             "Freeze Authority on Solana: The hidden switch that can lock your tokens.",
             "Stop trusting the hype. How to instantly verify if a contract is safe.",
-            "A step-by-step mini-guide on how to scan a token before aping in.",
-            "Why 90% of new memecoins fail, and how to find the 10% that survive.",
-            "The anatomy of a Rug Pull: What are the warning signs?",
-            "Don't get left holding the bag. Check the risk score before you buy."
+            "A step-by-step mini-guide on how to scan a token before aping in."
         ]
 
-    async def generate_post(self):
+        self.topics_channel = [
+            "Want to catch the next 100x memecoin before it pumps? Join our free signals channel.",
+            "Stop missing out on early gems. We scan 1000+ tokens daily and post the best ones for free.",
+            "Why pay for alpha groups when our Telegram channel posts new Solana gems automatically?",
+            "Get real-time alerts on new Pump.fun tokens before they explode. Join the Radar channel.",
+            "Tired of rug pulls? We filter the scams and post only the safest new tokens in our channel."
+        ]
+
+    async def generate_text(self, prompt_type: str, topic: str) -> str | None:
         if not self.groq_key:
-            logger.error("PromoAgent: GROQ_API_KEY missing.")
             return None
 
-        topic = random.choice(self.topics)
-        
-        # ✅ MODIFICATION ICI : On demande le lien complet à la place du @
-        prompt = (
-            "You are an elite crypto security analyst. "
-            "Write a highly engaging, scroll-stopping Telegram/Discord post.\n"
-            "TOPIC: " + topic + "\n"
-            "STRUCTURE: 1. HOOK (shocking statement) 2. VALUE (how CryptoPulse solves it) 3. CTA.\n"
-            "RULES: Max 200 characters. 3 emojis. No hashtags. "
-            "End with: 'Try it free now -> https://t.me/CryptoPulse113_bot'"
-        )
+        if prompt_type == "bot":
+            prompt = (
+                "You are an elite crypto security analyst. Write a short, engaging tweet/post.\n"
+                f"TOPIC: {topic}\n"
+                f"RULES: Max 200 characters. 2 emojis. End with: 'Try it free -> {self.bot_url}'"
+            )
+        else:
+            prompt = (
+                "You are a crypto marketing expert. Write a short, FOMO-inducing tweet/post.\n"
+                f"TOPIC: {topic}\n"
+                f"RULES: Max 200 characters. 2 emojis. End with: 'Join now -> {self.channel_url}'"
+            )
 
         url = "https://api.groq.com/openai/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {self.groq_key}",
-            "Content-Type": "application/json"
-        }
+        headers = {"Authorization": f"Bearer {self.groq_key}", "Content-Type": "application/json"}
         payload = {
             "model": "openai/gpt-oss-120b",
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.7,
-            "max_tokens": 2048,
-            "reasoning_effort": "low"
+            "temperature": 0.7, "max_tokens": 2048, "reasoning_effort": "low"
         }
 
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(url, headers=headers, json=payload)
-                if response.status_code != 200:
-                    logger.error(f"PromoAgent Groq error (Code {response.status_code}): {response.text}")
-                    return None
+                if response.status_code != 200: return None
                 data = response.json()
-                choice = data.get("choices", [{}])[0]
-                message_content = choice.get("message", {}).get("content", "")
-                
-                if not message_content or not message_content.strip():
-                    logger.error("PromoAgent: Réponse vide de Groq.")
-                    return None
-                return message_content.strip()
-        except Exception as exc:
-            logger.error(f"PromoAgent network error: {str(exc)}")
+                return data["choices"][0]["message"]["content"].strip()
+        except Exception:
             return None
 
     async def send_discord(self, text):
-        if not self.discord_webhook:
-            return
+        if not self.discord_webhook: return
         try:
             async with httpx.AsyncClient() as client:
                 await client.post(self.discord_webhook, json={"content": text})
                 logger.info("PromoAgent: Sent to Discord.")
-        except Exception as exc:
-            logger.error(f"PromoAgent Discord error: {str(exc)}")
-
-    async def send_telegram(self, text):
-        if not self.telegram_token or not self.telegram_channel:
-            return
-        url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
-        payload = {"chat_id": self.telegram_channel, "text": text, "disable_web_page_preview": True}
-        try:
-            async with httpx.AsyncClient() as client:
-                await client.post(url, json=payload)
-                logger.info("PromoAgent: Sent to Telegram.")
-        except Exception as exc:
-            logger.error(f"PromoAgent Telegram error: {str(exc)}")
+        except Exception: pass
 
     async def send_twitter(self, text):
-        if not self.twitter_auth or not self.twitter_ct0:
-            logger.warning("PromoAgent: Variables Twitter manquantes.")
-            return
-        
+        if not self.twitter_auth or not self.twitter_ct0: return
         try:
             safe_text = text[:270] if len(text) > 270 else text
-            
             client = Client(language='en-US')
-            client.set_cookies({
-                'auth_token': self.twitter_auth,
-                'ct0': self.twitter_ct0
-            })
-            
+            client.set_cookies({'auth_token': self.twitter_auth, 'ct0': self.twitter_ct0})
             await client.create_tweet(text=safe_text)
-            logger.info("PromoAgent: Sent to Twitter via twifork.")
-            
+            logger.info("PromoAgent: Sent to Twitter.")
         except Exception as exc:
             logger.error(f"PromoAgent Twitter error: {str(exc)}")
 
-    async def run_cycle(self):
-        logger.info("PromoAgent: Generating post...")
-        text = await self.generate_post()
+    async def run_bot_cycle(self):
+        text = await self.generate_text("bot", random.choice(self.topics_bot))
         if text:
-            logger.info(f"PromoAgent generated: {text[:60]}...")
             await self.send_discord(text)
-            await self.send_telegram(text)
             await self.send_twitter(text)
-        else:
-            logger.warning("PromoAgent: No text generated, skipping sending.")
+
+    async def run_channel_cycle(self):
+        text = await self.generate_text("channel", random.choice(self.topics_channel))
+        if text:
+            await self.send_discord(text)
+            await self.send_twitter(text)
 
     def start_scheduler(self):
-        if self.scheduler.running:
-            return
-        self.scheduler.add_job(self.run_cycle, "interval", minutes=30, id="promo_agent")
+        if self.scheduler.running: return
+        self.scheduler.add_job(self.run_bot_cycle, "interval", minutes=30, id="promo_bot")
+        self.scheduler.add_job(self.run_channel_cycle, "interval", minutes=60, id="promo_channel")
         self.scheduler.start()
-        asyncio.create_task(self.run_cycle())
+        asyncio.create_task(self.run_bot_cycle())
+        asyncio.create_task(self.run_channel_cycle())
 
     async def close(self):
-        if self.scheduler.running:
-            self.scheduler.shutdown(wait=False)
+        if self.scheduler.running: self.scheduler.shutdown(wait=False)

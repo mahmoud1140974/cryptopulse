@@ -5,7 +5,7 @@ import random
 
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from twikit import Client  # ✅ twifork s'importe comme twikit
+from twikit import Client  # ✅ C'est l'import de twifork
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ class PromoAgent:
                 message_content = choice.get("message", {}).get("content", "")
                 
                 if not message_content or not message_content.strip():
-                    logger.error(f"PromoAgent: Réponse vide de Groq.")
+                    logger.error("PromoAgent: Réponse vide de Groq.")
                     return None
                 return message_content.strip()
         except Exception as exc:
@@ -101,11 +101,11 @@ class PromoAgent:
 
     async def send_twitter(self, text):
         if not self.twitter_auth or not self.twitter_ct0:
-            logger.warning("PromoAgent: Variables Twitter manquantes.")
+            logger.warning("PromoAgent: Variables Twitter manquantes (TWITTER_AUTH_TOKEN ou TWITTER_CT0).")
             return
         
         try:
-            # ✅ Utilisation de twifork (Client twikit)
+            # ✅ Connexion à Twitter avec twifork
             client = Client(language='en-US')
             client.set_cookies({
                 'auth_token': self.twitter_auth,

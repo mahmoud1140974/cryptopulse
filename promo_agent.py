@@ -5,7 +5,7 @@ import random
 
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from twikit import Client  # ✅ C'est l'import de twifork
+from twikit import Client
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +37,13 @@ class PromoAgent:
             return None
 
         topic = random.choice(self.topics)
+        # ✅ On réduit la limite à 200 caractères pour être sûr de ne pas dépasser
         prompt = (
             "You are an elite crypto security analyst. "
             "Write a highly engaging, scroll-stopping Telegram/Discord post.\n"
             "TOPIC: " + topic + "\n"
             "STRUCTURE: 1. HOOK (shocking statement) 2. VALUE (how CryptoPulse solves it) 3. CTA.\n"
-            "RULES: Max 400 characters. 3 emojis. No hashtags. "
+            "RULES: Max 200 characters. 3 emojis. No hashtags. "
             "End with: 'Try it free now -> @CryptoPulse113_bot'"
         )
 
@@ -101,18 +102,20 @@ class PromoAgent:
 
     async def send_twitter(self, text):
         if not self.twitter_auth or not self.twitter_ct0:
-            logger.warning("PromoAgent: Variables Twitter manquantes (TWITTER_AUTH_TOKEN ou TWITTER_CT0).")
+            logger.warning("PromoAgent: Variables Twitter manquantes.")
             return
         
         try:
-            # ✅ Connexion à Twitter avec twifork
+            # ✅ Sécurité : On coupe le texte à 270 caractères maximum pour X
+            safe_text = text[:270] if len(text) > 270 else text
+            
             client = Client(language='en-US')
             client.set_cookies({
                 'auth_token': self.twitter_auth,
                 'ct0': self.twitter_ct0
             })
             
-            await client.create_tweet(text=text)
+            await client.create_tweet(text=safe_text)
             logger.info("PromoAgent: Sent to Twitter via twifork.")
             
         except Exception as exc:

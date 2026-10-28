@@ -40,7 +40,7 @@ class PromoAgent:
             "Tired of rug pulls? We filter the scams and post only the safest new tokens in our channel."
         ]
 
-        # Flux RSS (on garde les mêmes)
+        # Flux RSS pour les actualités
         self.news_feeds = [
             "https://cointelegraph.com/rss",
             "https://decrypt.co/feed",
@@ -70,12 +70,10 @@ class PromoAgent:
             return None
 
     async def download_image(self, image_url: str) -> str | None:
-        """Télécharge une image et renvoie le chemin local."""
         try:
             parsed = urlparse(image_url)
             if not parsed.scheme or not parsed.path:
                 return None
-            # On garde l'extension du fichier (jpg, png, webp)
             ext = os.path.splitext(parsed.path)[1] or ".jpg"
             filepath = f"/tmp/news_image{ext}"
             
@@ -159,7 +157,7 @@ class PromoAgent:
                     entry = feed.entries[0]
                     if entry.title not in self.posted_news_titles:
                         published_time = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
-                        if datetime.now(timezone.utc) - published_time < timedelta(hours=2):
+                        if datetime.now(timezone.utc) - published_time < timedelta(hours=3):
                             latest_news = entry
                             break
             except Exception:
@@ -171,7 +169,6 @@ class PromoAgent:
 
         logger.info(f"PromoAgent: New found: {latest_news.title}")
 
-        # 1. Extraire l'image (si disponible)
         image_url = None
         if hasattr(latest_news, 'enclosures') and latest_news.enclosures:
             image_url = latest_news.enclosures[0].get('href')
@@ -180,7 +177,6 @@ class PromoAgent:
             
         image_path = await self.download_image(image_url) if image_url else None
 
-        # 2. Générer le texte avec l'IA
         prompt = (
             "You are a top Crypto News reporter. Write a short, urgent, and engaging tweet about this news.\n"
             f"HEADLINE: {latest_news.title}\n"
@@ -191,10 +187,8 @@ class PromoAgent:
         text = await self.generate_text(prompt)
         if text:
             await self.send_discord(text)
-            # On envoie le tweet AVEC l'image
             await self.send_twitter(text, image_path=image_path)
             
-            # Nettoyage de l'image temporaire
             if image_path and os.path.exists(image_path):
                 os.remove(image_path)
 
@@ -205,12 +199,21 @@ class PromoAgent:
     def start_scheduler(self):
         if self.scheduler.running: return
         
-        self.scheduler.add_job(self.run_bot_cycle, "interval", minutes=30, id="promo_bot")
-        self.scheduler.add_job(self.run_channel_cycle, "interval", minutes=60, id="promo_channel")
-        self.scheduler.add_job(self.run_news_cycle, "interval", minutes=20, id="news_cycle")
+        # 🎯 LA NOUVELLE RÉPARTITION (30% Promo / 70% News)
+        # Total = ~44 posts / jour (Sous la limite de 50 de Twitter)
+        
+        # News : Toutes les 45 minutes (~32 posts/jour)
+        self.scheduler.add_job(self.run_news_cycle, "interval", minutes=45, id="news_cycle")
+        
+        # Bot : Toutes les 3 heures (8 posts/jour)
+        self.scheduler.add_job(self.run_bot_cycle, "interval", minutes=180, id="promo_bot")
+        
+        # Canal : Toutes les 6 heures (4 posts/jour)
+        self.scheduler.add_job(self.run_channel_cycle, "interval", minutes=360, id="promo_channel")
         
         self.scheduler.start()
         
+        # Lancement immédiat au démarrage
         asyncio.create_task(self.run_bot_cycle())
         asyncio.create_task(self.run_channel_cycle())
         asyncio.create_task(self.run_news_cycle())
